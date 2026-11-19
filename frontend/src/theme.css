@@ -1,0 +1,178 @@
+/* 119 situation-room palette. Navy ink carries text and actions, 119 signal orange is kept for the app bar
+   and for "committed / dispatched" moments, status colours only mean status. Layout comes from the console
+   styles; this file sets colour, panel surfaces and the few overlay sizes. */
+:root {
+  color-scheme: light;
+  --ink: #1e2a38;
+  --ink-2: #3b4757;
+  --signal: #e8573c;
+  --signal-deep: #c9452d;
+  --paper: #f2f4f7;
+  --surface: #ffffff;
+  --rule: #dde2e8;
+  --quiet: #6a7684;
+  --ok: #1f8a5b;
+  --hold: #a8701a;
+  --danger: #cf3b30;
+
+  --bg: var(--paper);
+  --bg-deep: #e7ebf0;
+  --panel: var(--surface);
+  --panel-2: #f6f8fa;
+  --panel-3: #eef1f5;
+  --field: #eef1f4;
+  --line: var(--rule);
+  --line-soft: #e8ecf0;
+  --line-strong: #b9c1cb;
+  --text: var(--ink);
+  --text-dim: var(--ink-2);
+  --text-faint: var(--quiet);
+  --action: #2f6690;
+  --action-strong: #24506f;
+  --action-ink: #ffffff;
+  --action-bg: rgba(47, 102, 144, 0.1);
+  --mint: #1f8a5b;
+  --mint-ink: #ffffff;
+  --mint-bg: rgba(31, 138, 91, 0.09);
+  --amber: var(--hold);
+  --amber-bg: rgba(168, 112, 26, 0.1);
+  --error: var(--danger);
+  --error-strong: #b02f26;
+  --error-bg: rgba(207, 59, 48, 0.08);
+  --muted-bg: rgba(30, 42, 56, 0.05);
+}
+body, .app-shell { background: var(--paper); color: var(--ink); }
+
+/* App bar: signal orange with white type; the active tab is a white underline, not a pill. */
+.masthead { background: var(--signal); border-bottom: 0; }
+.masthead .brand-name { color: #fff; }
+.masthead .brand-mark { background: #fff; color: var(--signal); }
+.masthead .nav-tab { color: rgba(255, 255, 255, 0.78); }
+.masthead .nav-tab:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
+.masthead .nav-tab.active, .masthead .nav-tab[aria-selected="true"] { color: #fff; border-bottom-color: #fff; }
+.masthead .mode-indicator { color: #fff; border-color: rgba(255, 255, 255, 0.55); background: transparent; }
+
+/* Buttons: navy ink, so they belong to the content, not to the orange bar. */
+.button { border-radius: 8px; }
+.button.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
+.button.secondary { background: var(--surface); border-color: var(--line-strong); color: var(--ink); }
+.button.secondary:hover:not(:disabled) { border-color: var(--ink); color: var(--ink); background: var(--surface); }
+.button:disabled { opacity: 0.55; }
+.button.primary:disabled { background: var(--panel-3); border-color: var(--line); color: var(--quiet); }
+.button.primary:hover:not(:disabled) { background: #0f1925; border-color: #0f1925; }
+.dispatch-bar select { background: var(--surface); border-color: var(--line-strong); color: var(--ink); border-radius: 8px; }
+.dispatch-bar .meta { color: var(--quiet); }
+.dispatch .alert { background: var(--error-bg); color: var(--error-strong); border-color: transparent; border-left: 3px solid var(--danger); }
+
+/* Information panels: a white sheet with a 3px rail that says which job the panel does. */
+.dispatch .dispatch-card {
+  position: relative; gap: 10px; padding: 14px 16px 16px 19px; background: var(--surface);
+  border: 1px solid var(--rule); border-radius: 10px;
+}
+.dispatch .dispatch-card[data-role="call"] { box-shadow: inset 3px 0 0 var(--ink); }
+.dispatch .dispatch-card[data-role="hospital"] { box-shadow: inset 3px 0 0 var(--ok); }
+.dispatch .dispatch-card[data-role="orders"] { box-shadow: inset 3px 0 0 var(--signal); }
+.dispatch .panel-header { padding-bottom: 8px; border-bottom: 1px solid var(--line-soft); }
+.dispatch .section-title { font-size: 15px; letter-spacing: -0.01em; }
+.dispatch .panel-header .meta { color: var(--quiet); font-size: 12px; }
+
+/* Bottom row: equal heights, each panel scrolls inside itself. */
+.dispatch-bottom { align-items: stretch; }
+.dispatch-bottom .dispatch-card { height: 440px; overflow: hidden; }
+.dispatch-bottom .dispatch-transcript ol { max-height: none; flex: 1; min-height: 0; overflow-y: auto; }
+.dispatch-bottom .dispatch-transfer, .dispatch-bottom .dispatch-orders-card { overflow-y: auto; }
+
+/* Transcript */
+.dispatch-transcript li { background: var(--panel-2); border-left: 3px solid var(--who); border-radius: 6px; }
+.dispatch-transcript li[data-speaker="1"] { --who: #7a5cc8; background: #f7f4fd; }
+.dispatch-transcript li[data-speaker="0"] { --who: #8a96a5; color: var(--ink-2); }
+.dt-note.is-wait { color: var(--hold); }
+.dt-note.is-commit { color: var(--ok); }
+
+/* Side panel: open questions keep their bars, committed ones fold to one line. */
+.dispatch-side .dispatch-card { padding-left: 16px; }
+.prob-block { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px; }
+.prob-block .prob-head strong { color: var(--hold); }
+.prob-block.is-folded { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) auto; align-items: baseline; gap: 8px;
+  padding: 7px 10px; background: var(--mint-bg); border-color: transparent; }
+.pf-name { font-size: 12px; color: var(--quiet); }
+.pf-value { font-size: 15px; color: var(--ok); }
+.pf-meta { font-size: 12px; color: var(--quiet); }
+.prob-track { background: #eef1f4; }
+.prob-fill { background: #9fb1c4; }
+.prob-need { background: var(--hold); }
+
+/* Map overlays: a compact console tag top-left, a narrow caption at the bottom. */
+.dispatch-map-wrap .map-banner {
+  left: 14px; right: auto; top: 14px; transform: none; display: flex; align-items: stretch; gap: 0;
+  min-width: 0; max-width: min(460px, 70%); padding: 0; text-align: left; border: 0; border-radius: 10px;
+  overflow: hidden; background: var(--surface); color: var(--ink); box-shadow: 0 6px 18px rgba(30, 42, 56, 0.16);
+  animation: none;
+}
+.dispatch-map-wrap .mb-state { display: grid; place-items: center; min-width: 92px; padding: 0 12px; color: #fff; font-size: 17px;
+  font-weight: 900; letter-spacing: 0.03em; background: var(--quiet); }
+.dispatch-map-wrap .map-banner[data-state="wait"] .mb-state { background: var(--hold); }
+.dispatch-map-wrap .map-banner[data-state="commit"] .mb-state { background: var(--ok); }
+.dispatch-map-wrap .mb-body { display: grid; gap: 1px; padding: 8px 12px 9px; }
+.dispatch-map-wrap .map-banner strong { font-size: 16px; color: var(--ink); letter-spacing: 0; }
+.dispatch-map-wrap .map-banner[data-state="wait"] strong, .dispatch-map-wrap .map-banner[data-state="commit"] strong { color: var(--ink); }
+.dispatch-map-wrap .map-banner[data-state="wait"], .dispatch-map-wrap .map-banner[data-state="commit"] { background: var(--surface); }
+.dispatch-map-wrap .map-banner-tag { font-size: 11px; color: var(--quiet); }
+.dispatch-map-wrap .map-banner-detail { font-size: 13px; color: var(--ink-2); }
+.dispatch-map-wrap .map-banner-detail .hl-label { color: var(--ink); font-size: 14px; }
+.dispatch-map-wrap .map-banner-detail .hl-prob { color: var(--hold); font-size: 15px; }
+.dispatch-map-wrap .map-banner-detail .hl-need { color: var(--ink-2); }
+.dispatch-map-wrap .map-banner-detail .hl-task { color: var(--ink-2); }
+.dispatch-map-wrap .map-banner-detail .hl-sep { color: var(--quiet); }
+.dispatch-map-wrap .map-banner-detail .hl-unit { color: var(--ok); font-size: 14px; }
+.dispatch-map-wrap .map-banner[data-state="commit"] { animation: commit-flash 900ms ease-out 1; }
+@keyframes commit-flash { 0% { box-shadow: 0 0 0 0 rgba(31, 138, 91, 0.55); } 100% { box-shadow: 0 0 0 14px rgba(31, 138, 91, 0); } }
+@media (prefers-reduced-motion: reduce) { .dispatch-map-wrap .map-banner[data-state="commit"] { animation: none; } }
+.dispatch-map-wrap .map-caption { bottom: 46px; width: min(640px, 78%); padding: 8px 14px; border-radius: 10px;
+  background: rgba(30, 42, 56, 0.9); border-left-width: 4px; animation: none; }
+.dispatch-map-wrap .map-caption p { margin-top: 1px; font-size: 17px; line-height: 1.4; color: #fff; }
+.dispatch-map-wrap .map-caption-who { font-size: 12px; }
+.dispatch-map-wrap .map-caption[data-speaker="1"] { --who: #c3b1f2; }
+.dispatch-map-wrap .map-caption[data-speaker="0"] { --who: #b9c3cf; }
+.map-follow { background: var(--surface); color: var(--ink-2); border-color: var(--rule); }
+.map-follow.is-on { color: var(--ok); border-color: var(--ok); }
+.dispatch-legend { background: rgba(255, 255, 255, 0.94); }
+
+/* Transfer hospitals: chosen one open, others as one-line rows. */
+.transfer-rule strong { color: var(--ink); }
+.transfer-basis.is-wait { color: var(--hold); }
+.transfer-basis.is-commit { color: var(--ok); }
+.transfer-list li { gap: 6px; padding: 8px 10px; background: var(--surface); border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--line-strong); border-radius: 8px; }
+.transfer-list li[data-chosen="true"] { border-color: rgba(31, 138, 91, 0.35); border-left-color: var(--ok); background: #f6fbf8; }
+.hosp-row { display: grid; grid-template-columns: minmax(0, 1fr) auto 3.2rem; align-items: baseline; gap: 10px; width: 100%;
+  min-height: 0; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.hosp-row:disabled { cursor: default; color: var(--ink); opacity: 1; }
+.hosp-row:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; border-radius: 4px; }
+.hosp-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hosp-pick { margin-right: 6px; padding: 1px 6px; border-radius: 4px; background: var(--ok); color: #fff; font-size: 11px; font-weight: 800; }
+.hosp-sum { font-size: 12px; color: var(--quiet); white-space: nowrap; }
+.hosp-p { font-size: 13px; font-weight: 800; text-align: right; color: var(--ink-2); }
+li[data-chosen="true"] .hosp-p { color: var(--ok); }
+.hosp-bar { display: block; height: 4px; border-radius: 2px; background: #eef1f4; overflow: hidden; }
+.hosp-bar span { display: block; height: 100%; background: #9fb1c4; }
+li[data-chosen="true"] .hosp-bar span { background: var(--ok); }
+.hf-chip { background: var(--surface); border-color: var(--rule); color: var(--ink-2); }
+.hf-chip.is-ok { color: var(--ok); border-color: rgba(31, 138, 91, 0.45); }
+.hf-chip.is-no, .hf-chip.is-zero { color: var(--danger); border-color: rgba(207, 59, 48, 0.45); }
+.hf-msg { background: rgba(168, 112, 26, 0.08); color: #7d5512; }
+.hf-msg.is-block { background: var(--error-bg); color: var(--error-strong); }
+
+/* Dispatch orders: the orange rail belongs here, the moment a unit is sent. */
+.dispatch-orders li { background: var(--panel-2); border-left-width: 3px; border-radius: 8px; }
+.dispatch-orders li[data-kind="ambulance"] { --c: var(--ok); }
+.dispatch-orders li[data-kind="pump"] { --c: var(--signal); }
+.dispatch-orders li[data-kind="rescue"] { --c: var(--hold); }
+.do-head .tabular { color: var(--ok); }
+.do-head .is-treat { color: var(--hold); }
+.do-head .is-transport { color: var(--ink-2); }
+.do-source { color: var(--quiet); }
+
+/* The live region wrapper takes no space; the tile notice moves below the banner. */
+.map-banner-live { position: static; }
+.dispatch-map-alert { top: auto; bottom: 64px; }

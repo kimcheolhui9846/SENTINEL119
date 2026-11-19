@@ -4,15 +4,38 @@
 
 공식 요구사항은 **서로 다른 시나리오 3가지의 에이전트 실행 로그**다. JSONL 형식·아래 필드·파일명은 프로젝트 내부 규약이며 공식 지정 형식이 아니다. [평가·제출 체크리스트](../../track1-submission.md)를 참고한다.
 
-## 상태와 생성 예정 파일
+## 제출 로그
 
-현재 실제 실행 로그는 없다. 이 README는 기록 규약이며 제출 로그로 계산하지 않는다.
+2026-11-20에 [`tools/scenario_log.py`](../../../tools/scenario_log.py)로 실행한 기록이다. 입력 통화는 [scenarios](../scenarios/)의 공유용 합성 통화이고, 모델·도로 경로·병원 정보는 실제 호출이다. 각 로그의 `run_start`에 실행 commit, 모드, 임계값, 주입한 장애가 있다.
 
-| 파일 | 시나리오 |
+| 파일 | 시나리오 | 확인할 동작 |
+| --- | --- | --- |
+| `scenario-01.jsonl` | 성북구 장위동 심정지 의심 | 태스크별 확정 시점이 다름(2턴 출동유형, 6턴 세부유형·긴급도·주증상), 확정 전 1순위 주증상으로 병원 미리 추천, 심정지 확정 후 펌뷸런스 추가 배차 |
+| `scenario-02.jsonl` | 영등포구 당산동3가 빌라 화재 | 구급 외 유형: 화재 확정 시 펌프차 2대 + 구급차 동시 배차, 병원 단계 없음 |
+| `scenario-03.jsonl` | 강남구 삼성동 흉통 + 장애 주입 | 병원 API timeout(주입) → 보류·재조회, 판단 서버 연결 실패(주입) → 확정 유지·다음 턴 복구. 주증상은 임계값 미만으로 끝까지 WAIT (기대 동작과 다름, 그대로 기록) |
+
+배차 차량과 경로 시간은 실행 시점의 TMAP 경로에 따라 달라질 수 있다.
+
+### 다시 실행
+
+판단 서버(`SENTINEL_ZORO_URL`)와 `.env.local`의 `TMAP_APP_KEY`·`NMC_SERVICE_KEY`가 있는 상태에서 저장소 루트에서 실행한다.
+
+```bash
+SENTINEL_ZORO_URL=http://127.0.0.1:8119 python tools/scenario_log.py   docs/submission/scenarios/scenario-01.json docs/submission/logs/scenario-01.jsonl
+```
+
+### 이벤트
+
+| `event` | 내용 |
 | --- | --- |
-| `scenario-01.jsonl` | 순차 정보 공개와 태스크별 확정·대기 |
-| `scenario-02.jsonl` | 차량 가용성·역량·ETA 비교와 후보 변경 |
-| `scenario-03.jsonl` | 병원 정보 부족·API 오류와 복구·보류 |
+| `run_start` | `run_id`, `git_commit`, 모드(`live_model`, `synthetic_script`, `synthetic_world`, `live_api`), 임계값, 신고 지점, 주입 장애 |
+| `fleet`, `model` | 가상 차량 수, 모델 ID·revision·체크포인트 파일 sha256 |
+| `turn` | 공개된 발화 한 턴 (모델 입력은 1턴부터 현재 턴까지) |
+| `model_call` | `request_id`, 입력 턴 수, SENTINEL_ZORO 문항별 확률, base 1순위, 지연, 성공·오류, 주입 여부 |
+| `policy` | 태스크별 `COMMIT`/`WAIT`/`LOCKED`/`N/A`, 조회 실패 시 `HOLD` |
+| `tool_call` | `dispatch_plan`(지식베이스 편성), `transfer_hospital`(이송 원칙, 후보별 병상·처치·메시지, 데이터 출처) |
+| `action` | `dispatch_unit`, `recommend_hospital` (모두 `simulated: true`) |
+| `run_end` | 최종 확정, 배차 목록, 기대 동작 대비 결과, 전체 실행 시간 |
 
 ## 기록 규약
 

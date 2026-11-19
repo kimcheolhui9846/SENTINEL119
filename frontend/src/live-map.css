@@ -1,0 +1,11 @@
+.live-map-panel {
+  --field-ink: #192b3d;
+  --field-secondary: #485d6e;
+  --field-line: #c5d3d8;
+  display: grid;
+  gap: 0.5rem;
+}
+.live-map-wrap { height: clamp(22rem, 44vh, 32rem); border-radius: var(--radius); }
+.live-marker--rescue { --marker-color: #8a5a00; }
+.live-map-note { font-size: 0.8125rem; }
+.live-marker--hospital.dispatched { box-shadow: 0 0 0 2px #185c91, 0 0 0 5px #fff; }
