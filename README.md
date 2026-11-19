@@ -48,7 +48,9 @@ npm.cmd run build --prefix frontend
 
 실시간 모드는 백엔드 실행 전에 `ZORO_BASE_URL`을 지정합니다. 서버가 여러 모델을 제공하면 `ZORO_MODEL_ID`도 지정합니다. 역할별 서버는 `ZORO_INTAKE_BASE_URL`, `ZORO_VEHICLE_BASE_URL`, `ZORO_HOSPITAL_BASE_URL`과 각각의 `_MODEL_ID`로 설정합니다. 서버가 응답해야 [모델 어댑터](backend/inference.py)가 모델 ID를 확인하고 typed decision을 요청합니다. 차량·병원 자료는 두 모드 모두 가상입니다.
 
-백엔드 단위·HTTP 테스트는 `.\.venv\Scripts\python.exe -B -m unittest discover -v`로 실행합니다. 프론트 개발 서버는 `npm.cmd run dev --prefix frontend`로 시작하며 `/api`를 로컬 FastAPI에 전달합니다. [브라우저 통합 테스트](frontend/tests/console.browser.js)는 서버가 켜진 상태에서 Playwright MCP의 브라우저 코드 실행 기능에 파일로 전달할 수 있습니다.
+모의 출동 클라이언트는 화면에 표시한 세션의 `expected_version`, 차량의 `expected_vehicle_id`, `decisions.vehicle.recommendation_revision`에서 읽은 `expected_vehicle_revision`을 `dispatch` 이벤트에 함께 보냅니다. 추천이 바뀌어 HTTP 409를 받으면 최신 세션을 표시하고 운영자의 새 클릭을 기다립니다. 모델 응답에 `model`이 있으면 요청한 ID와 일치해야 합니다. 이 필드를 생략하는 기존 서버에서는 요청에 선택한 ID만 확인할 수 있습니다.
+
+백엔드 단위·HTTP 테스트는 `.\.venv\Scripts\python.exe -B -m unittest discover -v`로 실행합니다. 프론트 개발 서버는 `npm.cmd run dev --prefix frontend`로 시작하며 `/api`를 로컬 FastAPI에 전달합니다. 서버가 켜진 상태에서 Playwright MCP로 [데스크톱 관제 흐름](frontend/tests/console.browser.js)과 [차량 재확인·병원 정보 복구](frontend/tests/review.browser.js)를 검증할 수 있습니다.
 
 ## 공용 판단 하네스
 

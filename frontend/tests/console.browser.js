@@ -75,12 +75,19 @@ async page => {
   if (await activeTurn.count()) throw Error('turn active after reset');
   await click('자동 재생');await page.getByText('3 / 3턴',{exact:true}).waitFor({timeout:12000});
   await assertProgress(['true', 'true', 'true']);
-  const mobile = [];
-  for (const width of [320, 390]) {
-    await page.setViewportSize({width, height: 844});
-    const dims = await page.evaluate(() => ({viewport: innerWidth, content: document.documentElement.scrollWidth}));
-    if (dims.content > dims.viewport + 1) throw Error('horizontal overflow ' + JSON.stringify(dims));
-    mobile.push(dims);
+  const desktop = [];
+  for (const viewport of [{width:1280,height:800}, {width:1440,height:900}, {width:1920,height:1080}]) {
+    await page.setViewportSize(viewport);
+    const transcript = await page.getByRole('region', {name:'신고 대화'}).boundingBox();
+    const decisions = await card('출동유형').boundingBox();
+    const columns = page.getByRole('table', {name:'병원 후보 목록'}).getByRole('columnheader');
+    if (!transcript || !decisions || decisions.x < transcript.x + transcript.width - 1) {
+      throw Error('Transcript and decisions must appear side by side at ' + viewport.width);
+    }
+    const dimensions = await columns.evaluateAll(headers => headers.map(header => header.getBoundingClientRect().width));
+    if (dimensions.length !== 4 || dimensions.some(width => width <= 0)) throw Error('Missing hospital comparison column');
+    if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)) throw Error('Desktop horizontal overflow');
+    desktop.push(viewport.width);
   }
-  return {threeScenarios:true,correction:true,evidence:true,history:true,dispatchOnce:true,retry:true,manual:true,autoplay:true,progress:true,syntheticEtas:true,keyboardTabs:true,mobile};
+  return {threeScenarios:true,correction:true,evidence:true,history:true,dispatchOnce:true,retry:true,manual:true,autoplay:true,progress:true,syntheticEtas:true,keyboardTabs:true,desktop};
 }

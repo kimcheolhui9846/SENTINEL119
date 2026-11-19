@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
-import type { Mode, Session } from './api';
+import type { DispatchEvent, Mode, Session } from './api';
 import { CandidatePanel, candidateName, DecisionsPanel, HistoryPanel } from './panels';
 import { useConsole } from './useConsole';
 import './styles.css';
@@ -24,22 +24,27 @@ function Transcript({ session }: { session: Session }) {
   );
 }
 
-function DispatchPanel({ session, busy, onDispatch }: { session: Session; busy: boolean; onDispatch: () => void }) {
+function DispatchPanel({ session, disabled, onDispatch }: {
+  session: Session; disabled: boolean; onDispatch: (event: DispatchEvent) => void;
+}) {
   const applied = session.applied_vehicle;
-  const decision = session.decisions.vehicle;
-  const eligible = session.vehicles.some((item) => item.id === decision.choice && item.availability === 'available');
-  const canDispatch = decision.status === 'COMMIT' && eligible && !applied;
-  let reason = '현재 확정된 차량에 모의 출동을 적용합니다.';
+  const { status, choice, recommendation_revision: revision } = session.decisions.vehicle;
+  const vehicle = session.vehicles.find((item) => item.id === choice && item.availability === 'available');
+  const canDispatch = status === 'COMMIT' && !!vehicle && typeof revision === 'number' && !applied;
+  let reason = '확정된 가용 차량을 기다리고 있습니다.';
   if (applied) reason = `${candidateName(session.vehicles, applied)}에 모의 출동을 적용했습니다.`;
-  else if (!canDispatch) reason = '확정된 가용 차량을 기다리고 있습니다.';
+  else if (canDispatch) reason = `${vehicle.name}에 모의 출동을 적용합니다.`;
   return (
     <section className="panel dispatch-panel" aria-labelledby="dispatch-heading">
       <div>
         <h2 id="dispatch-heading" className="section-title">모의 출동</h2>
         <p id="dispatch-reason" className="reason" aria-live="polite">{reason}</p>
       </div>
-      <button type="button" className="button primary" disabled={busy || !canDispatch}
-        aria-describedby="dispatch-reason" onClick={onDispatch}>모의 출동 적용</button>
+      <button key={`${session.id}:${session.version}:${choice}:${revision}`} type="button" className="button primary"
+        disabled={disabled || !canDispatch} aria-describedby="dispatch-reason"
+        onClick={() => {
+          if (canDispatch) onDispatch({ action: 'dispatch', expected_vehicle_id: vehicle.id, expected_vehicle_revision: revision });
+        }}>모의 출동 적용</button>
     </section>
   );
 }
@@ -54,7 +59,7 @@ export default function App() {
   const modeLabel = mode === 'live' ? '실시간 Zoro' : '시뮬레이션';
   const showRetry = !!problem?.recovery || canRetry;
   const notice = problem?.message ?? session?.error ??
-    (session?.external_status === 'timeout' ? '병원 정보 조회 시간이 초과되었습니다. 저장 자료를 표시합니다.' : null);
+    (session?.external_status === 'timeout' ? '병원 정보 조회 시간이 초과되었습니다. 최신 수용 정보를 기다리고 있습니다.' : null);
 
   function changeSelection(id: string, nextMode: Mode) {
     setDraft('');
@@ -66,7 +71,7 @@ export default function App() {
     const message = draft.trim();
     if (!message) return;
     setAutoPlay(false);
-    if (await send('text', message)) setDraft((value) => value === draft ? '' : value);
+    if (await send({ action: 'text', text: message })) setDraft((value) => value === draft ? '' : value);
   }
 
   function switchTab(event: KeyboardEvent<HTMLButtonElement>) {
@@ -158,7 +163,7 @@ export default function App() {
                 <Transcript session={session} />
                 <div className="controls">
                   <button type="button" className="button primary" disabled={busy || !canNext}
-                    onClick={() => { setAutoPlay(false); void send('next'); }}>다음 발화</button>
+                    onClick={() => { setAutoPlay(false); void send({ action: 'next' }); }}>다음 발화</button>
                   <button type="button" className={`button secondary${autoPlay ? ' active' : ''}`}
                     aria-pressed={autoPlay} disabled={!canNext} onClick={() => setAutoPlay(!autoPlay)}>자동 재생</button>
                 </div>
@@ -179,7 +184,8 @@ export default function App() {
                   <CandidatePanel kind="vehicle" session={session} />
                   <CandidatePanel kind="hospital" session={session} />
                 </div>
-                <DispatchPanel session={session} busy={busy} onDispatch={() => void send('dispatch')} />
+                <DispatchPanel session={session} disabled={busy || !!problem?.recovery}
+                  onDispatch={(event) => void send(event, session)} />
               </div>
             </div>
           )}

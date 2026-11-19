@@ -91,10 +91,58 @@ export function DecisionsPanel({ session }: { session: Session }) {
   );
 }
 
-function CandidateTime({ value }: { value: string }) {
+function CandidateTime({ value }: { value: string | null }) {
   if (!value) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? <span>{value}</span> : <time dateTime={value}>{sourceTime.format(date)}</time>;
+}
+
+function HospitalTable({ session }: { session: Session }) {
+  const stale = session.external_status === 'timeout' || session.external_status === 'cached';
+  return (
+    <div className="hospital-table-scroll">
+      <table className="hospital-table" aria-labelledby="candidates-hospital">
+        <thead>
+          <tr>
+            <th scope="col">병원명</th>
+            <th scope="col">수용 상태</th>
+            <th scope="col">정보 시각</th>
+            <th scope="col">ETA</th>
+          </tr>
+        </thead>
+        <tbody>
+          {session.hospitals.map((candidate) => {
+            const observation = stale ? candidate.last_observation : null;
+            const time = stale ? observation?.source_at : candidate.source_at;
+            return (
+              <tr key={candidate.id} data-selected={!stale && session.decisions.hospital.status === 'COMMIT' &&
+                session.decisions.hospital.choice === candidate.id ? 'true' : undefined}>
+                <th scope="row">
+                  <strong className="candidate-name">{candidate.name}</strong>
+                  <span className="meta">{candidate.detail}</span>
+                </th>
+                <td>
+                  {stale ? (
+                    <>
+                      <strong className="hospital-stale">현재 추천 불가</strong>
+                      <span className="meta">{observation
+                        ? `마지막 확인 · ${availabilityLabels[observation.availability]}` : '이전 확인 정보 없음'}</span>
+                    </>
+                  ) : <span className="availability" data-status={candidate.availability}>{availabilityLabels[candidate.availability]}</span>}
+                </td>
+                <td>
+                  {time ? <CandidateTime value={time} /> : <span className="meta">확인 시각 없음</span>}
+                  {time && <span className="meta">{stale ? '이전 확인 시각' : candidate.source}</span>}
+                </td>
+                <td>{candidate.eta_min === null ? <span className="meta">정보 없음</span>
+                  : <span className="candidate-eta">가상 ETA {candidate.eta_min}분</span>}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 export function CandidatePanel({ kind, session }: { kind: 'vehicle' | 'hospital'; session: Session }) {
@@ -108,7 +156,7 @@ export function CandidatePanel({ kind, session }: { kind: 'vehicle' | 'hospital'
           {isVehicle ? '가상 차량' : sourceLabels[session.external_status]}
         </span>
       </header>
-      {candidates.length ? (
+      {!candidates.length ? <p className="empty-state">현재 표시할 후보가 없습니다.</p> : !isVehicle ? <HospitalTable session={session} /> : (
         <ul className="candidate-list">
           {candidates.map((candidate) => (
             <li key={candidate.id} className="candidate-row" data-availability={candidate.availability}
@@ -117,7 +165,7 @@ export function CandidatePanel({ kind, session }: { kind: 'vehicle' | 'hospital'
               <div className="candidate-heading">
                 <strong className="candidate-name">{candidate.name}</strong>
                 <span className={`availability ${candidate.availability}`} data-status={candidate.availability}>
-                  {session.applied_vehicle === candidate.id && isVehicle
+                  {session.applied_vehicle === candidate.id
                     ? '모의 출동 적용됨' : availabilityLabels[candidate.availability]}
                 </span>
               </div>
@@ -129,7 +177,7 @@ export function CandidatePanel({ kind, session }: { kind: 'vehicle' | 'hospital'
             </li>
           ))}
         </ul>
-      ) : <p className="empty-state">현재 표시할 후보가 없습니다.</p>}
+      )}
     </section>
   );
 }

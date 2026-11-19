@@ -665,7 +665,7 @@ textarea:disabled, select:disabled, input:disabled {
 /* ---------- Resources ---------- */
 .resources-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
   gap: 26px 28px;
   min-width: 0;
 }
@@ -718,6 +718,36 @@ textarea:disabled, select:disabled, input:disabled {
 .candidate-row[data-status="commit"] { border-left-color: var(--mint); background: var(--mint-bg); }
 .candidate-row[data-status="wait"] { border-left-color: var(--amber); background: var(--amber-bg); }
 .candidate-row[data-availability="unavailable"] .candidate-name { color: var(--text-dim); font-weight: 700; }
+
+.hospital-table-scroll { overflow-x: auto; }
+
+.hospital-table {
+  width: 100%;
+  min-width: 25rem;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 14px;
+}
+
+.hospital-table th, .hospital-table td {
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+  vertical-align: top;
+}
+
+.hospital-table thead th { color: var(--text-dim); font-size: 13px; }
+.hospital-table thead th:nth-child(1) { width: 32%; }
+.hospital-table thead th:nth-child(2) { width: 25%; }
+.hospital-table thead th:nth-child(3) { width: 23%; }
+.hospital-table thead th:nth-child(4) { width: 20%; }
+.hospital-table tbody tr[data-selected="true"] { background: var(--mint-bg); }
+.hospital-table tbody th { font-weight: 400; }
+.hospital-table .candidate-name { display: block; word-break: keep-all; }
+.hospital-table .meta { display: block; font-size: 12px; word-break: keep-all; }
+.hospital-table .candidate-eta { padding-inline: 5px; font-size: 13px; }
+.hospital-table time { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.hospital-stale { color: var(--amber); }
 
 .availability {
   flex: none;
@@ -836,6 +866,7 @@ textarea:focus-visible, select:focus-visible, input:focus-visible {
 }
 
 @media (max-width: 720px) {
+  .resources-grid { grid-template-columns: minmax(0, 1fr); }
   .masthead { gap: 0 12px; padding: 0 14px; }
   .brand { min-height: 52px; }
   .mode-indicator { margin-left: auto; }

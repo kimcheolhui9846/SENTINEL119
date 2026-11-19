@@ -54,6 +54,7 @@ class _Session:
     version: int = 0
     snapshot_version: int = 0
     view_revision: int = 0
+    vehicle_recommendation_revision: int = 0
     step: int = 0
     processing: bool = False
     manual: bool = False
@@ -165,13 +166,14 @@ class SessionService:
         with session.lock:
             return self._view(session)
 
-    def event(self, session_id, action, expected_version, text=None):
+    def event(self, session_id, action, expected_version, text=None, *, expected_vehicle_id=None,
+              expected_vehicle_revision=None):
         session = self._find(session_id)
         with session.lock:
             if type(expected_version) is not int or expected_version != session.version:
                 raise SessionError(409, "stale_version")
             if action == "dispatch":
-                return self._apply_dispatch(session)
+                return self._apply_dispatch(session, expected_vehicle_id, expected_vehicle_revision)
             if action == "next":
                 self._next(session)
                 tasks = _TASKS
@@ -213,6 +215,16 @@ class SessionService:
             raise SessionError(409, "replay_finished")
         step = session.step + 1
         frame = get_frame(session.scenario["id"], step)
+        if frame["external_status"] in ("timeout", "cached"):
+            observations = {}
+            for item in session.frame["hospitals"]:
+                if item["availability"] != "unknown" and item["source_at"] is not None:
+                    observations[item["id"]] = {"availability": item["availability"], "source_at": item["source_at"]}
+                elif item.get("last_observation") is not None:
+                    observations[item["id"]] = item["last_observation"]
+            for item in frame["hospitals"]:
+                if item["id"] in observations:
+                    item["last_observation"] = observations[item["id"]]
         if session.applied_vehicle is not None:
             self._exclude_applied_vehicle(session, frame)
         session.step, session.frame = step, frame
@@ -265,10 +277,14 @@ class SessionService:
             raise SessionError(409, "retry_unavailable")
         return (*_INTAKE, *_CANDIDATES) if any(task in _INTAKE for task in failed) else failed
 
-    def _apply_dispatch(self, session):
+    def _apply_dispatch(self, session, expected_vehicle_id, expected_vehicle_revision):
         if session.applied_vehicle is not None:
             raise SessionError(409, "dispatch_already_applied")
         decision = session.guard.active("vehicle")
+        if (not isinstance(expected_vehicle_id, str) or expected_vehicle_id != decision.choice
+                or type(expected_vehicle_revision) is not int
+                or expected_vehicle_revision != session.vehicle_recommendation_revision):
+            raise SessionError(409, "stale_vehicle_recommendation")
         if decision.status != "COMMIT" or decision.choice not in _available(session.frame, "vehicle"):
             raise SessionError(409, "vehicle_not_ready")
         session.applied_vehicle = decision.choice
@@ -300,10 +316,17 @@ class SessionService:
             hospitals=dict.fromkeys(session.eligible["hospital"], "available"),
             candidate_versions=session.candidate_versions,
         )
+        self._revise_vehicle_recommendation(session, before["vehicle"])
         for task, previous in before.items():
             if session.guard.active(task) is not previous:
                 session.metadata.pop(task, None)
         self._sync_history(session)
+
+    @staticmethod
+    def _revise_vehicle_recommendation(session, previous):
+        # Guard returns a new decision even when a new result chooses the same vehicle.
+        if session.guard.active("vehicle") is not previous:
+            session.vehicle_recommendation_revision += 1
 
     def _queue(self, session, tasks):
         if session.latest_job is not None:
@@ -419,6 +442,7 @@ class SessionService:
                     envelope, error = None, "모델 응답 시간이 초과되었습니다."
             if role in _CANDIDATES and _available(session.frame, role) != session.eligible[role]:
                 envelope, error = None, "판단 중 후보의 가용 정보가 만료되었습니다."
+            previous_vehicle = session.guard.active("vehicle")
             for task, ticket in tickets.items():
                 result = session.guard.apply(ticket, envelope)
                 if result.status == "STALE":
@@ -436,6 +460,7 @@ class SessionService:
                     "latency_ms": elapsed,
                     "error": error_message,
                 }
+            self._revise_vehicle_recommendation(session, previous_vehicle)
             self._sync_history(session)
             session.view_revision += 1
 
@@ -492,5 +517,6 @@ class SessionService:
             "model_id": info.get("model_id"), "guideline_refs": [],
             "missing_information": [reason] if waiting_for_information else [],
             "candidate_snapshot_id": session.candidate_versions.get(task),
+            **({"recommendation_revision": session.vehicle_recommendation_revision} if task == "vehicle" else {}),
             "produced_at": info.get("produced_at"), "latency_ms": info.get("latency_ms"),
         }

@@ -24,15 +24,19 @@ class SessionEvent(BaseModel):
     action: Literal["next", "text", "retry", "dispatch"]
     expected_version: Annotated[int, Field(strict=True, ge=0)]
     text: Annotated[str, Field(min_length=1, max_length=2000)] | None = None
+    expected_vehicle_id: Annotated[str, Field(min_length=1)] | None = None
+    expected_vehicle_revision: Annotated[int, Field(strict=True, ge=0)] | None = None
 
     @model_validator(mode="after")
-    def check_text(self):
+    def check_action_fields(self):
         if self.action == "text":
             if self.text is None or not self.text.strip():
                 raise ValueError("text is required for a text event")
             self.text = self.text.strip()
         elif self.text is not None:
             raise ValueError("text is only valid for a text event")
+        if self.action != "dispatch" and self.model_fields_set & {"expected_vehicle_id", "expected_vehicle_revision"}:
+            raise ValueError("vehicle recommendation proof is only valid for a dispatch event")
         return self
 
 
@@ -67,7 +71,10 @@ def create_app(inference=None) -> FastAPI:
 
     @app.post("/api/sessions/{session_id}/events", status_code=202)
     def apply_event(session_id: str, body: SessionEvent):
-        return sessions.event(session_id, body.action, body.expected_version, text=body.text)
+        return sessions.event(
+            session_id, body.action, body.expected_version, text=body.text,
+            expected_vehicle_id=body.expected_vehicle_id, expected_vehicle_revision=body.expected_vehicle_revision,
+        )
 
     dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
     index = dist / "index.html"

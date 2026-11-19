@@ -15,8 +15,8 @@ class SessionReasons(unittest.TestCase):
         self.addCleanup(service.close)
         return service
 
-    def event(self, service, session, action="next", text=None):
-        state = service.event(session["id"], action, session["version"], text)
+    def event(self, service, session, action="next", text=None, **fields):
+        state = service.event(session["id"], action, session["version"], text, **fields)
         deadline = monotonic() + 3
         while state["processing"] and monotonic() < deadline:
             sleep(.01)
@@ -83,7 +83,9 @@ class SessionReasons(unittest.TestCase):
     def test_applied_dispatch_waiting_reason_describes_the_completed_action(self):
         service = self.service()
         ready = self.event(service, service.create("reroute", "simulation"))
-        applied = self.event(service, ready, "dispatch")
+        recommendation = ready["decisions"]["vehicle"]
+        applied = self.event(service, ready, "dispatch", expected_vehicle_id=recommendation["choice"],
+                             expected_vehicle_revision=recommendation["recommendation_revision"])
         self.assertEqual(applied["applied_vehicle"], "A")
         decision = applied["decisions"]["vehicle"]
         self.assertEqual(decision["status"], "WAIT")

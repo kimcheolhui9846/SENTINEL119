@@ -116,6 +116,24 @@ class ModelTransport(unittest.TestCase):
                     self.assertEqual(caught.exception.code, "model_identity")
             self.assertEqual(requests, [])
 
+    def test_explicit_response_model_must_match_the_requested_model(self):
+        answer = {"type": "choice", "choice": "구급", "probabilities": {"구급": 1, "화재": 0}}
+        for declared in ("other", None, 7):
+            with self.subTest(declared=declared):
+                with model_server(response={"model": declared, "answers": {"dispatch": answer}}) as (url, requests):
+                    with patch.dict(os.environ, {"ZORO_BASE_URL": url}):
+                        with self.assertRaises(self.error) as caught:
+                            self.inference.decide("live", "intake", {}, INTAKE_CRITERIA, {})
+                    self.assertEqual(caught.exception.code, "model_identity")
+                    self.assertEqual(requests[0]["model"], "base")
+
+    def test_matching_explicit_response_model_is_accepted(self):
+        answer = {"type": "choice", "choice": "구급", "probabilities": {"구급": 1, "화재": 0}}
+        with model_server(response={"model": "base", "answers": {"dispatch": answer}}) as (url, _):
+            with patch.dict(os.environ, {"ZORO_BASE_URL": url}):
+                result = self.inference.decide("live", "intake", {}, INTAKE_CRITERIA, {})
+        self.assertEqual(result, ({"answers": {"dispatch": answer}}, "base"))
+
     def test_deadline_includes_both_model_discovery_and_inference(self):
         from backend.inference import _CALL_TIMEOUT, _live_decide
 

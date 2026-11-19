@@ -101,6 +101,8 @@ async def _live_decide(role, state, criteria):
     except (httpx.HTTPError, httpx.InvalidURL):
         raise InferenceError("model_unavailable") from None
 
+    if "model" in result and result["model"] != model_id:
+        raise InferenceError("model_identity")
     answers = result.get("answers")
     if not isinstance(answers, dict):
         raise InferenceError("model_response_invalid")

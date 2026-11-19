@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, createSession, getSession, listScenarios, postEvent } from './api';
-import type { Action, Mode, Scenario, Session } from './api';
+import type { DispatchEvent, Mode, Scenario, Session, SessionEvent } from './api';
 
 const POLL_DELAY_MS = 250;
 const POLL_RETRY_MS = [500, 1000, 2000];
 const PLAY_DELAY_MS = 1200;
 
 type Recovery = 'scenarios' | 'open' | 'sync';
-type Problem = { message: string; recovery?: Recovery };
+type Notice = { message: string; reconfirmDispatch?: boolean };
+type Problem = Notice & { recovery?: Recovery };
+
+const dispatchConflict: Notice = {
+  message: '신고 상태가 바뀌었습니다. 최신 차량 추천을 다시 확인한 뒤 모의 출동을 적용하세요.',
+  reconfirmDispatch: true,
+};
 
 function errorMessage(error: unknown): string {
   return error instanceof ApiError ? error.message : '서버에 연결할 수 없습니다. 잠시 뒤 다시 시도해 주세요.';
@@ -121,30 +127,33 @@ export function useConsole() {
     };
   }, [inputVersion, pollCycle, processing, publish, sessionId]);
 
-  const sync = useCallback(async (id: string, token: number, message?: string) => {
+  const sync = useCallback(async (id: string, token: number, notice?: Notice) => {
     try {
       const updated = await getSession(id);
       if (token !== generation.current) return;
       publish(updated, token);
-      setProblem(message ? { message } : null);
+      setProblem(notice ?? null);
       setPollCycle((cycle) => cycle + 1);
     } catch (error) {
       if (token !== generation.current) return;
       setProblem({
         message: errorMessage(error),
         recovery: error instanceof ApiError && error.status === 404 ? 'open' : 'sync',
+        reconfirmDispatch: notice?.reconfirmDispatch,
       });
     }
   }, [publish]);
 
-  const send = useCallback(async (action: Action, text?: string): Promise<boolean> => {
-    const active = current.current;
-    if (!active || busyRef.current) return false;
+  const send = useCallback(async (...[event, viewed]:
+    [event: Exclude<SessionEvent, DispatchEvent>] | [event: DispatchEvent, viewed: Session]
+  ): Promise<boolean> => {
+    const active = viewed ?? current.current;
+    if (!active || current.current?.id !== active.id || busyRef.current) return false;
     const token = generation.current;
     changeBusy(true);
     setProblem(null);
     try {
-      const updated = await postEvent(active, action, text);
+      const updated = await postEvent(active, event);
       if (token !== generation.current) return false;
       publish(updated, token);
       return true;
@@ -152,9 +161,11 @@ export function useConsole() {
       if (token !== generation.current) return false;
       setAutoPlay(false);
       if (error instanceof ApiError && error.status === 409) {
-        await sync(active.id, token, error.message);
+        const dispatchChanged = event.action === 'dispatch' &&
+          (error.code === 'stale_version' || error.code === 'stale_vehicle_recommendation');
+        await sync(active.id, token, dispatchChanged ? dispatchConflict : { message: error.message });
       } else if (!(error instanceof ApiError) || error.status >= 500) {
-        await sync(active.id, token, errorMessage(error));
+        await sync(active.id, token, { message: errorMessage(error) });
       } else {
         setProblem({ message: errorMessage(error), recovery: error.status === 404 ? 'open' : undefined });
       }
@@ -172,7 +183,7 @@ export function useConsole() {
       return;
     }
     if (processing || busy) return;
-    const timer = window.setTimeout(() => { void send('next'); }, PLAY_DELAY_MS);
+    const timer = window.setTimeout(() => { void send({ action: 'next' }); }, PLAY_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [autoPlay, busy, canNext, processing, send, session?.step]);
 
@@ -190,10 +201,10 @@ export function useConsole() {
     } else if (problem?.recovery === 'sync' && active) {
       const token = generation.current;
       changeBusy(true);
-      await sync(active.id, token);
+      await sync(active.id, token, problem.reconfirmDispatch ? dispatchConflict : undefined);
       if (token === generation.current) changeBusy(false);
     } else if (canRetry) {
-      await send('retry');
+      await send({ action: 'retry' });
     }
   }
 
