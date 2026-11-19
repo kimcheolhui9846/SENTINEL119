@@ -4,6 +4,13 @@ import type { CompareScenario as ScenarioSummary, LlmResponse, ScenarioDetail, S
 import { advanceHarness, emptyZoro, harnessThreshold, SUBTYPE_OF, suspendHarness } from "./demoHarness";
 import type { Commit, ZoroId, ZoroState } from "./demoHarness";
 
+const H4_DEV_PRECISION = [
+  { task: "출동유형", sft: [0.986, 0.867], base: [0.723, 1.0] },
+  { task: "구급 세부유형", sft: [0.8, 0.492], base: [0.179, 0.75] },
+  { task: "긴급도", sft: [0.889, 0.217], base: [0.333, 0.723] },
+  { task: "주증상", sft: [0.765, 0.279], base: [0.4, 0.962] },
+];
+const pct = (value: number) => Math.round(value * 100) + "%";
 const TYPE_MS = 420;
 const NEXT_DELAY_MS = 900;
 export type Labels = StreamResponse["labels"];
@@ -45,13 +52,31 @@ function Chips({ dist, labels, commit, threshold, locked, picked }: {
         return (
           <span key={key} role="listitem" className={`chip-opt ${state}`} style={{ ["--p" as string]: p.toFixed(3) }}>
             <span className="chip-name">{commit?.key === key ? "✓ " : ""}{label}</span>
-            {commit?.key === key ? <span className="chip-p tabular">{commit.turn}턴 확정</span>
+            {commit?.key === key ? <span className="chip-p tabular">{pct(commit.p)} · {commit.turn}턴 확정</span>
               : dist ? <span className="chip-p tabular">{Math.round(p * 100)}</span> : null}
           </span>
         );
       })}
       {!commit && !locked && dist && threshold ? <span className="chip-rule tabular">확정 {Math.round(threshold * 100)}%↑</span> : null}
     </div>
+  );
+}
+
+// 16 symptom options do not fit one screen: folded by default, the summary shows the commit or the leader.
+function SymptomFold({ dist, labels, commit, threshold }: {
+  dist: Record<string, number>; labels: Record<string, string>; commit?: Commit; threshold?: number;
+}) {
+  const best = top(dist);
+  return (
+    <details className="sym-fold">
+      <summary>
+        {commit ? <strong className="sym-commit">✓ {commit.label} · {pct(commit.p)} · {commit.turn}턴 확정</strong>
+          : best ? <span className="tabular">모델 추정 {labels[best[0]] ?? best[0]} {pct(best[1])}
+            {threshold === undefined ? null : " · 정책 기준 " + pct(threshold)}</span>
+          : null}
+      </summary>
+      <Chips dist={dist} labels={labels} commit={commit} threshold={threshold} />
+    </details>
   );
 }
 
@@ -73,7 +98,9 @@ export function ZoroPanel({ id, name, note, model, labels, busy }: {
   const subQ = d ? SUBTYPE_OF[d.key] : undefined;
   const threshold = (question: string, key?: string) => harnessThreshold(model.profile, question, key);
   const overrides = Object.entries(model.profile?.dispatch_overrides ?? {})
-    .map(([key, value]) => ` · ${labels?.dispatch[key] ?? key} ${Math.round(value! * 100)}%`).join("");
+    .map(([key, value]) => ` · ${labels?.dispatch[key] ?? key} ${pct(value!)}`).join("");
+  const subtypeOverrides = Object.entries(model.profile?.subtype_overrides ?? {})
+    .map(([key, value]) => ` · ${key === "ems_subtype" ? "구급" : "구조"} ${pct(value)}`).join("");
   return (
     <section className={`model-panel variant-${id}`} aria-label={name}>
       <div className="model-id">
@@ -81,7 +108,11 @@ export function ZoroPanel({ id, name, note, model, labels, busy }: {
         <h2>{name}</h2>
         <p className="muted">{note}</p>
         {model.reviewTurn !== null ? <p className="chip-flag">재검토 · {model.reviewTurn}턴</p> : null}
-        {model.profile ? <p className="muted">출동유형 기준 {Math.round(model.profile.thresholds.dispatch * 100)}%{overrides}</p> : null}
+        {model.profile ? <>
+          <p className="muted">출동유형 기준 {pct(model.profile.thresholds.dispatch)}{overrides}</p>
+          <p className="muted">세부유형 기준 {pct(model.profile.thresholds.subtype)}{subtypeOverrides}
+            {" · 긴급도 "}{pct(model.profile.thresholds.urgency)}{" · 주증상 "}{pct(model.profile.thresholds.symptom)}</p>
+        </> : null}
       </div>
       <div className="decision-rows">
         <div className="drow"><span className="dlabel">출동유형</span>
@@ -96,11 +127,14 @@ export function ZoroPanel({ id, name, note, model, labels, busy }: {
           {labels ? <Chips dist={probs?.urgency} labels={labels.urgency} commit={model.commits.urgency}
                            threshold={threshold("urgency")} locked={!d} /> : null}
         </div>
-        {subQ === "ems_subtype" && probs?.ems_symptom && labels?.ems_symptom ? (
-          <div className="drow"><span className="dlabel">주증상</span>
-            <Chips dist={probs.ems_symptom} labels={labels.ems_symptom} commit={model.commits.symptom} threshold={threshold("ems_symptom")} />
-          </div>
-        ) : null}
+        <div className="drow"><span className="dlabel">주증상</span>
+          {!d ? <span className="pending">출동유형 확정 후 열림</span>
+            : subQ !== "ems_subtype" ? <span className="pending">{d.label} · 구급 출동에서만 판단</span>
+            : probs?.ems_symptom && labels?.ems_symptom
+              ? <SymptomFold dist={probs.ems_symptom} labels={labels.ems_symptom}
+                  commit={model.commits.symptom} threshold={threshold("ems_symptom")} />
+              : <span className="pending">주증상 응답 없음</span>}
+        </div>
       </div>
       <Latency last={model.latencies[model.latencies.length - 1]} list={model.latencies} busy={busy} />
     </section>
@@ -128,6 +162,9 @@ export function LlmPanel({ state, labels }: { state: LlmState; labels: Labels | 
         </div>
         <div className="drow"><span className="dlabel">긴급도</span>
           {labels ? <Chips labels={labels.urgency} picked={a ? a.urgency : undefined} /> : null}
+        </div>
+        <div className="drow"><span className="dlabel">주증상</span>
+          <span className="pending">생성 항목 아님 (출동유형·세부유형·긴급도만 생성)</span>
         </div>
         {state.raw ? <p className="llm-raw tabular" title="생성된 원문">{state.raw}</p> : null}
       </div>
@@ -227,7 +264,7 @@ export default function CompareView({ scenarios }: { scenarios: ScenarioSummary[
       zoroRef.current = { sft: suspendHarness(zoroRef.current.sft), base: suspendHarness(zoroRef.current.base) };
       setZoro(zoroRef.current);
       const message = e instanceof ApiError ? e.message : "판단 요청에 실패했습니다.";
-      setError(`${message.startsWith("WAIT") ? message : `WAIT · ${turnNo}턴 ${message}`} 같은 턴을 다시 시도할 수 있습니다.`);
+      setError(message.startsWith("WAIT") ? message : `WAIT · ${turnNo}턴 ${message} 같은 턴을 다시 시도할 수 있습니다.`);
       setPlaying(false);
     } finally {
       if (myRun === runId.current) { inFlight.current = false; setBusy(false); }
@@ -310,6 +347,22 @@ export default function CompareView({ scenarios }: { scenarios: ScenarioSummary[
               </ul>
             </section>
           ) : null}
+          <section className="dev-precision" aria-label="H4 개발셋 과거 측정">
+            <h3>H4 보정 당시 측정 · 개발셋 83통화</h3>
+            <table>
+              <thead><tr><th scope="col">태스크</th><th scope="col">SENTINEL_ZORO 정밀도 (확정률)</th><th scope="col">Zoro · base 정밀도 (확정률)</th></tr></thead>
+              <tbody>
+                {H4_DEV_PRECISION.map((row) => (
+                  <tr key={row.task}>
+                    <th scope="row">{row.task}</th>
+                    <td className="tabular"><strong>{pct(row.sft[0])}</strong> ({pct(row.sft[1])})</td>
+                    <td className="tabular">{pct(row.base[0])} ({pct(row.base[1])})</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="muted">표는 H4 보정 당시의 정밀도와 확정률입니다. 현재 통화에 적용된 서버 기준은 모델 카드에서 확인할 수 있습니다.</p>
+          </section>
           <p className="muted stream-foot">
             Zoro 칩의 밝기는 모델 확률입니다. 확정 후보와 적용 기준은 서버의 판단 정책에서 가져옵니다.
             세부유형·긴급도는 출동유형 확정 후에만 확정합니다. Qwen은 같은 대화를 보고 JSON을 생성하며, 매 턴의 답을 그대로 표시합니다.

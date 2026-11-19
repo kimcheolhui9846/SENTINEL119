@@ -91,6 +91,7 @@ class DemoHarnessTests(unittest.TestCase):
         self.assertEqual(harness["model_id"], FINGERPRINT)
         self.assertEqual(harness["thresholds"], PROFILE["thresholds"])
         self.assertEqual(harness["dispatch_overrides"], {"fire": .75})
+        self.assertEqual(harness["subtype_overrides"], {})
         self.assertEqual(harness["gate"], "allow")
         self.assertEqual(harness["choices"], {"sft": {
             "dispatch": {"key": "fire", "label": "화재", "p": .75},
@@ -154,6 +155,28 @@ class DemoHarnessTests(unittest.TestCase):
                 result, _ = self.post(data, path)
                 self.assertEqual((result.status_code, result.json()), (502, {"detail": "compare_unavailable"}))
 
+    def test_subtype_override_controls_the_named_head(self):
+        path = self.profile_path(subtype_overrides={"rescue_subtype": .68})
+        data = response()
+        data["labels"]["rescue_subtype"] = RESCUE_LABELS.copy()
+        scores = {"safety": .68, "property": .25, "suicide": 0, "other_rescue": .07}
+        data["results"]["sft"]["probabilities"]["rescue_subtype"] = scores
+        result, _ = self.post(data, path)
+        self.assertEqual(result.status_code, 200)
+        harness = result.json()["harness"]
+        self.assertEqual(harness["subtype_overrides"], {"rescue_subtype": .68})
+        self.assertEqual(harness["choices"]["sft"]["rescue_subtype"], {"key": "safety", "label": "안전사고", "p": .68})
+        legacy, _ = self.post(data, self.profile_path())
+        self.assertNotIn("rescue_subtype", legacy.json()["harness"]["choices"]["sft"])
+        self.assertNotEqual(harness["policy_digest"], legacy.json()["harness"]["policy_digest"])
+
+    def test_default_profile_matches_published_h4_dev83_thresholds(self):
+        profile = self.harness_module().load_profile(ROOT / "backend/data/demo-harness.json")
+        self.assertEqual(profile.version, "h4-dev83-v1")
+        self.assertEqual(profile.thresholds, {"dispatch": .82, "subtype": .86, "urgency": .82, "symptom": .69})
+        self.assertEqual(profile.dispatch_overrides, {"ems": .66, "rescue": .86, "fire": .79, "other": .82})
+        self.assertEqual(profile.subtype_overrides, {"ems_subtype": .86, "rescue_subtype": .68})
+
     def test_taxonomy_head_without_policy_threshold_is_sanitized(self):
         task = "future_head"
         labels = {"first": "첫째", "second": "둘째"}
@@ -195,6 +218,8 @@ class DemoHarnessTests(unittest.TestCase):
         malformed = (
             self.profile_path(model_id="invalid"), self.profile_path(thresholds={}),
             self.profile_path(dispatch_overrides={"fire": True}), self.profile_path(dispatch_overrides={"unseen": .75}),
+            self.profile_path(subtype_overrides={"rescue_subtype": True}), self.profile_path(subtype_overrides={"urgency": .68}),
+            self.profile_path(subtype_overrides={"ems_symptom": .69}), self.profile_path(subtype_overrides=None),
             self.profile_path(withdrawals=[WITHDRAWAL, WITHDRAWAL]),
             self.write(raw.replace(b'"fire": 0.75', b'"fire": 0.75, "fire": 0.75')),
         )

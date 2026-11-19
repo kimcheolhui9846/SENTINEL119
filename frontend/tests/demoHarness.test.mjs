@@ -75,6 +75,11 @@ test('missing or malformed harness and identity or digest drift suspend action w
   }
   assert.equal(advance(initial, 1, harness()).accepted, false);
   assert.equal(advance(initial, 3, harness()).accepted, false);
+  for (const changed of [{ model_id: 'different' }, { policy_digest: 'different' }]) {
+    assert.equal(advance(initial, 2, harness({}, changed)).note,
+      'WAIT · 2턴 모델 또는 판단 정책이 바뀌었습니다. 이전 모델과 정책을 복원하거나 새 통화를 시작하세요.');
+  }
+  assert.match(advance(initial, 2, undefined).note, /같은 턴을 다시 시도할 수 있습니다\.$/);
 });
 
 test('threshold display uses the server override for any category and handles empty overrides', () => {
@@ -85,6 +90,18 @@ test('threshold display uses the server override for any category and handles em
   assert.equal(alternate.accepted, true);
   assert.equal(harnessThreshold(alternate.next.profile, 'dispatch', 'rescue'), .87);
   assert.equal(advance(emptyZoro(), 1, harness({}, { dispatch_overrides: { unexpected: .5 } })).accepted, false);
+});
+
+test('subtype display accepts an optional server override and rejects malformed subtype policies', () => {
+  const legacy = advance(emptyZoro(), 1, harness());
+  assert.equal(harnessThreshold(legacy.next.profile, 'rescue_subtype'), thresholds.subtype);
+  const alternate = advance(emptyZoro(), 1, harness({}, { subtype_overrides: { rescue_subtype: .68 } }));
+  assert.equal(alternate.accepted, true);
+  assert.equal(harnessThreshold(alternate.next.profile, 'rescue_subtype'), .68);
+  assert.equal(harnessThreshold(alternate.next.profile, 'ems_subtype'), thresholds.subtype);
+  for (const subtype_overrides of [null, [], { dispatch: .9 }, { ems_subtype: 2 }, { rescue_subtype: NaN }]) {
+    assert.equal(advance(emptyZoro(), 1, harness({}, { subtype_overrides })).accepted, false);
+  }
 });
 
 test('transfer requires a confirmed EMS subtype and uses only confirmed symptom evidence', () => {

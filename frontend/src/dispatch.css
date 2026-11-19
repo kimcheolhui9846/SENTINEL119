@@ -59,23 +59,23 @@
 .dispatch-legend .legend-note { color: #485d6e; }
 
 /* Map overlays: the model's decision on top, the latest utterance as a caption at the bottom. */
-.map-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 600; display: grid; justify-items: center;
+.dispatch-map-wrap .map-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 600; display: grid; justify-items: center;
   gap: 2px; min-width: min(560px, 80%); max-width: 90%; padding: 10px 18px; border-radius: 12px; text-align: center;
   background: #101b25e8; color: #eaf3f6; box-shadow: 0 6px 20px #0008; border: 2px solid var(--line-strong); animation: banner-in 260ms ease-out; }
-.map-banner strong { font-size: 24px; letter-spacing: 0.02em; }
-.map-banner[data-state="wait"] { border-color: var(--amber); }
-.map-banner[data-state="wait"] strong { color: var(--amber); }
-.map-banner[data-state="commit"] { border-color: var(--mint); background: #07231ef0; animation: banner-in 260ms ease-out, banner-pulse 1.2s ease-out 2; }
-.map-banner[data-state="commit"] strong { color: var(--mint); }
-.map-banner-tag { font-size: 12px; color: var(--text-faint); font-weight: 700; }
-.map-banner-detail { font-size: 15px; color: var(--text-dim); }
-.map-caption { position: absolute; left: 50%; bottom: 52px; transform: translateX(-50%); z-index: 600; width: min(820px, 88%);
+.dispatch-map-wrap .map-banner strong { font-size: 24px; letter-spacing: 0.02em; }
+.dispatch-map-wrap .map-banner[data-state="wait"] { border-color: var(--amber); }
+.dispatch-map-wrap .map-banner[data-state="wait"] strong { color: var(--amber); }
+.dispatch-map-wrap .map-banner[data-state="commit"] { border-color: var(--mint); background: #07231ef0; animation: banner-in 260ms ease-out, banner-pulse 1.2s ease-out 2; }
+.dispatch-map-wrap .map-banner[data-state="commit"] strong { color: var(--mint); }
+.dispatch-map-wrap .map-banner-tag { font-size: 12px; color: var(--text-faint); font-weight: 700; }
+.dispatch-map-wrap .map-banner-detail { font-size: 15px; color: var(--text-dim); }
+.dispatch-map-wrap .map-caption { position: absolute; left: 50%; bottom: 52px; transform: translateX(-50%); z-index: 600; width: min(820px, 88%);
   padding: 12px 18px; border-radius: 12px; background: #0b141ce6; color: #f4f8fa; box-shadow: 0 6px 20px #0008;
   border-left: 6px solid var(--who); animation: caption-in 300ms ease-out; }
-.map-caption[data-speaker="1"] { --who: #a58ce0; }
-.map-caption[data-speaker="0"] { --who: #84b7d5; }
-.map-caption-who { font-size: 13px; color: var(--who); font-weight: 700; }
-.map-caption p { margin: 2px 0 0; font-size: 22px; line-height: 1.4; }
+.dispatch-map-wrap .map-caption[data-speaker="1"] { --who: #a58ce0; }
+.dispatch-map-wrap .map-caption[data-speaker="0"] { --who: #84b7d5; }
+.dispatch-map-wrap .map-caption-who { font-size: 13px; color: var(--who); font-weight: 700; }
+.dispatch-map-wrap .map-caption p { margin: 2px 0 0; font-size: 22px; line-height: 1.4; }
 @keyframes banner-in { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }
 @keyframes caption-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
 @keyframes banner-pulse { 0% { box-shadow: 0 0 0 0 #59d7bfaa; } 100% { box-shadow: 0 0 0 18px #59d7bf00; } }
@@ -125,13 +125,13 @@
 .transfer-basis.is-wait { color: var(--amber); }
 .transfer-basis.is-commit { color: var(--mint); }
 /* Banner detail: the numbers that decide WAIT / COMMIT stand out. */
-.map-banner-detail { font-size: 16px; }
-.map-banner-detail .hl-task { color: #b6c8d2; font-weight: 600; }
-.map-banner-detail .hl-label { color: #ffffff; font-weight: 800; font-size: 18px; }
-.map-banner-detail .hl-prob { color: var(--amber); font-weight: 800; font-size: 20px; }
-.map-banner-detail .hl-need { color: var(--mint); font-weight: 800; }
-.map-banner-detail .hl-sep { color: #6f8797; margin: 0 2px; }
-.map-banner-detail .hl-unit { color: var(--mint); font-weight: 800; font-size: 18px; }
+.dispatch-map-wrap .map-banner-detail { font-size: 16px; }
+.dispatch-map-wrap .map-banner-detail .hl-task { color: #b6c8d2; font-weight: 600; }
+.dispatch-map-wrap .map-banner-detail .hl-label { color: #ffffff; font-weight: 800; font-size: 18px; }
+.dispatch-map-wrap .map-banner-detail .hl-prob { color: var(--amber); font-weight: 800; font-size: 20px; }
+.dispatch-map-wrap .map-banner-detail .hl-need { color: var(--mint); font-weight: 800; }
+.dispatch-map-wrap .map-banner-detail .hl-sep { color: #6f8797; margin: 0 2px; }
+.dispatch-map-wrap .map-banner-detail .hl-unit { color: var(--mint); font-weight: 800; font-size: 18px; }
 /* Free-input mode */
 .live-hint { font-size: 15px; font-weight: 700; color: var(--amber); }
 .live-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 8px; }

@@ -1,0 +1,23 @@
+{
+ "id": "scenario-03",
+ "title": "합성 신고 · 강남구 삼성동 · 흉통 + 장애 주입",
+ "summary": "흉통 구급 신고에서 판단 서버 무응답과 병원 정보 API 장애를 의도적으로 주입합니다. 판단은 이전 상태를 유지하고, 병원 선정은 보류 후 다음 턴에 재시도합니다.",
+ "address": "서울특별시 강남구 삼성동",
+ "expected": {"dispatch": "구급", "urgency": "상", "ems_symptom": "흉통·가슴불편감·심계항진"},
+ "faults": [
+  {"turn": 4, "target": "decision_server", "kind": "connect_error", "note": "SENTINEL_ZORO 판단 서버 주소를 닫힌 포트로 바꿔 한 턴 동안 연결 실패를 만듭니다."},
+  {"target": "nmc_api", "kind": "timeout", "first_requests": 1, "note": "첫 병원 조회에서 국립중앙의료원 API 호출이 timeout 나도록 합니다."}
+ ],
+ "turns": [
+  {"speaker": 0, "text": "네, 119 상황실입니다."},
+  {"speaker": 1, "text": "남편이 가슴이 너무 아프대요."},
+  {"speaker": 0, "text": "주소 말씀해 주세요."},
+  {"speaker": 1, "text": "강남구 삼성동이요. 오피스텔 8층이에요."},
+  {"speaker": 0, "text": "언제부터 아프셨어요?"},
+  {"speaker": 1, "text": "한 삼십 분 됐어요. 가슴을 쥐어짜는 것 같다고 하고 식은땀을 흘려요."},
+  {"speaker": 0, "text": "숨 쉬는 건 어떠세요? 의식은 있으시고요?"},
+  {"speaker": 1, "text": "의식은 있는데 숨이 차다고 해요. 왼쪽 팔도 저리대요."},
+  {"speaker": 0, "text": "드시는 약이나 앓는 병 있으세요?"},
+  {"speaker": 1, "text": "고혈압약 먹고 있어요. 쉰여덟 살이에요."}
+ ]
+}

@@ -91,8 +91,9 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfe
 
   useEffect(() => {
     if (!element.current) return;
-    const map = L.map(element.current, { zoomSnap: 0.5, minZoom: 10, maxZoom: 18, scrollWheelZoom: true })
+    const map = L.map(element.current, { zoomSnap: 0.5, minZoom: 10, maxZoom: 18, scrollWheelZoom: true, zoomControl: false })
       .setView([37.5665, 126.978], 11);
+    L.control.zoom({ position: 'topright' }).addTo(map);
     map.attributionControl.setPrefix(false);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · 소방관서 위치 OSM',
@@ -407,6 +408,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   const [patrols, setPatrols] = useState<Patrol[]>([]);
   const [labels, setLabels] = useState<Labels | null>(null);
   const [hospitalPlan, setHospitalPlan] = useState(emptyTransfer);
+  const [openHospitals, setOpenHospitals] = useState<string[]>([]);
   const hospitalPlanRef = useRef(hospitalPlan);
   const transfer = hospitalPlan.suggestion?.response ?? null;
   const transferBasis = hospitalPlan.suggestion?.basis;
@@ -439,6 +441,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   const reset = useCallback(() => {
     run.current += 1; inFlight.current = false;
     sentKey.current = ''; updateTransfer({ type: 'reset' });
+    setOpenHospitals([]);
     pendingReply.current = null;
     asked.current = new Set();
     zoro.current = { sft: emptyZoro(), base: emptyZoro() };
@@ -532,7 +535,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
       setSft(zoro.current.sft); setBase(zoro.current.base);
       stopResourceActions();
       const message = e instanceof ApiError ? e.message : '모델 응답을 확인할 수 없습니다.';
-      setError(`${message.startsWith('WAIT') ? message : `WAIT · ${turn}턴 ${message}`} 같은 턴을 다시 시도할 수 있습니다.`);
+      setError(message.startsWith('WAIT') ? message : `WAIT · ${turn}턴 ${message} 같은 턴을 다시 시도할 수 있습니다.`);
       setPlaying(false);
       return null;
     }
@@ -639,12 +642,12 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   let banner: { state: 'wait' | 'commit' | 'idle'; title: string; detail: React.ReactNode };
   if (sft.reviewTurn !== null) banner = { state: 'wait', title: '재검토 · 추가 지령 보류',
     detail: `${sft.reviewTurn}턴부터 새 출동·이송 판단을 보류합니다.` };
-  else if (sft.blocked) banner = { state: 'wait', title: 'WAIT · 판단 보류', detail: `${sft.turn + 1}턴 응답을 다시 확인해야 합니다.` };
-  else if (!last) banner = { state: 'idle', title: '대기', detail: '재생을 누르면 신고 통화가 한 턴씩 들어옵니다.' };
-  else if (!last.note) banner = { state: 'idle', title: '판단 중…', detail: `${lines.length}턴까지의 대화를 보고 있습니다.` };
+  else if (sft.blocked) banner = { state: 'wait', title: '판단 보류', detail: `${sft.turn + 1}턴 응답을 다시 확인해야 합니다.` };
+  else if (!last) banner = { state: 'idle', title: '통화 대기', detail: '재생을 누르면 신고 통화가 한 턴씩 들어옵니다.' };
+  else if (!last.note) banner = { state: 'idle', title: '판단 중', detail: `${lines.length}턴까지의 대화를 읽고 있습니다.` };
   else if (last.note.startsWith('COMMIT')) {
     const sent = orders.filter((o) => o.turn === lines.length && o.unit);
-    banner = { state: 'commit', title: last.note.replace('COMMIT · ', 'COMMIT  '),
+    banner = { state: 'commit', title: last.note.replace('COMMIT · ', ''),
       detail: sent.length ? <>→ <b className="hl-unit">{sent.map((o) => o.unit?.name).join(', ')}</b> 출동</>
         : c.dispatch?.label === '기타' ? <>→ <b className="hl-unit">출동 없이 상담·이첩</b></> : '' };
   } else {
@@ -653,7 +656,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
     const d = open ? dist(open[0]) : undefined;
     const best = d ? Object.entries(d).sort((a, b) => b[1] - a[1])[0] : undefined;
     const threshold = open && best ? need(open[0], best[0]) : undefined;
-    banner = { state: 'wait', title: 'WAIT · 더 듣기',
+    banner = { state: 'wait', title: '더 듣기',
       detail: open && best && labels ? (
         <>
           <span className="hl-task">{open[1]}</span> 모델 추정 <b className="hl-label">{labels[open[0]]?.[best[0]] ?? best[0]}</b>{' '}
@@ -666,19 +669,28 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
     const d = dist(qid);
     if (!d || !labels?.[qid]) return null;
     const rows = Object.entries(d).sort((a, b) => b[1] - a[1]).slice(0, 4);
+    if (commit) {
+      return (
+        <div className="prob-block is-folded" data-state="commit">
+          <span className="pf-name">{title}</span>
+          <strong className="pf-value">{commit.label}</strong>
+          <span className="pf-meta tabular">{pct(commit.p)} · {commit.turn}턴</span>
+        </div>
+      );
+    }
     return (
-      <div className="prob-block" data-state={commit ? 'commit' : 'wait'}>
+      <div className="prob-block" data-state="wait">
         <div className="prob-head"><span>{title}</span>
-          <strong>{commit ? `${commit.label} · ${commit.turn}턴 확정` : 'WAIT'}</strong></div>
+          <strong>WAIT</strong></div>
         {rows.map(([key, p]) => {
           const threshold = need(qid, key);
           return (
-          <div key={key} className="prob-row" data-picked={commit?.key === key}>
-            <span className="prob-label">{labels[qid][key] ?? key}</span>
-            <span className="prob-track"><span className="prob-fill" style={{ width: pct(p) }} />
-              {threshold !== undefined ? <span className="prob-need" style={{ left: pct(threshold) }} aria-hidden="true" /> : null}</span>
-            <span className="prob-value tabular">{pct(p)}</span>
-          </div>
+            <div key={key} className="prob-row">
+              <span className="prob-label">{labels[qid][key] ?? key}</span>
+              <span className="prob-track"><span className="prob-fill" style={{ width: pct(p) }} />
+                {threshold !== undefined ? <span className="prob-need" style={{ left: pct(threshold) }} aria-hidden="true" /> : null}</span>
+              <span className="prob-value tabular">{pct(p)}</span>
+            </div>
           );
         })}
       </div>
@@ -687,14 +699,19 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
 
   const overlay = (
     <>
-      <div className="map-banner" data-state={banner.state} key={`b-${lines.length}-${banner.state}`} aria-live="polite">
-        <span className="map-banner-tag">SENTINEL_ZORO{last?.ms ? ` · ${Math.round(last.ms)}ms` : ''}</span>
-        <strong>{banner.title}</strong>
-        {banner.detail ? <span className="map-banner-detail">{banner.detail}</span> : null}
+      <div className="map-banner-live" aria-live="polite" aria-atomic="true">
+      <div className="map-banner" data-state={banner.state} key={`b-${lines.length}-${banner.state}`}>
+        <span className="mb-state">{banner.state === 'commit' ? 'COMMIT' : banner.state === 'wait' ? 'WAIT' : '대기'}</span>
+        <span className="mb-body">
+          <span className="map-banner-tag">SENTINEL_ZORO {lines.length ? `${lines.length}턴` : ''}{last?.ms ? ` · ${Math.round(last.ms)}ms` : ''}</span>
+          <strong>{banner.title}</strong>
+          {banner.detail ? <span className="map-banner-detail">{banner.detail}</span> : null}
+        </span>
+      </div>
       </div>
       {last ? (
         <div className="map-caption" data-speaker={last.speaker} key={`c-${lines.length}`}>
-          <span className="map-caption-who">{last.speaker === 0 ? '수보요원' : '신고자'} · {lines.length}턴</span>
+          <span className="map-caption-who">{last.speaker === 0 ? '수보요원' : '신고자'}</span>
           <p>{last.text}</p>
         </div>
       ) : null}
@@ -753,7 +770,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
         </aside>
       </div>
       <div className="dispatch-bottom">
-          <section className="panel dispatch-card dispatch-transcript">
+          <section className="panel dispatch-card dispatch-transcript" data-role="call">
             <header className="panel-header"><h2 className="section-title">신고 통화</h2>
               <span className="meta tabular">{live ? `${lines.length}턴` : `${lines.length} / ${call?.turns.length ?? 0}턴`}</span></header>
             <ol ref={transcript}>
@@ -779,7 +796,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
               </form>
             ) : null}
           </section>
-          <section className="panel dispatch-card dispatch-transfer">
+          <section className="panel dispatch-card dispatch-transfer" data-role="hospital">
             <header className="panel-header"><h2 className="section-title">이송 병원</h2>
               <span className="meta">{transfer?.zoro?.latency_ms ? `Zoro ${Math.round(transfer.zoro.latency_ms)}ms` : ''}</span></header>
             {transport ? <p className="meta">이송 지령 기록 · {transport.hospital.name}</p> : null}
@@ -798,11 +815,25 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
                     {transfer.hospitals.map((h) => {
                       const p = transfer.zoro?.probabilities[h.hpid] ?? 0;
                       const chosen = transfer.zoro?.choice === h.hpid;
+                      const open = chosen || openHospitals.includes(h.hpid);
+                      const toggle = () => setOpenHospitals((ids) => ids.includes(h.hpid) ? ids.filter((x) => x !== h.hpid) : [...ids, h.hpid]);
                       return (
-                        <li key={h.hpid} data-chosen={chosen}>
-                          <div className="do-head"><strong>{chosen ? '✓ ' : ''}{h.name}</strong><span className="tabular">{Math.round(p * 100)}%</span></div>
-                          <span className="prob-track"><span className="prob-fill" style={{ width: `${Math.round(p * 100)}%` }} /></span>
-                          <HospitalFacts h={h} prefer={transfer.rule.prefer ?? []} />
+                        <li key={h.hpid} data-chosen={chosen} data-open={open}>
+                          {chosen ? (
+                            <div className="hosp-row">
+                              <span className="hosp-name"><span className="hosp-pick">이송</span>{h.name}</span>
+                              <span className="hosp-sum tabular">{Math.round(h.route.duration_s / 60)}분 · 응급실 {h.er_beds ?? '-'}</span>
+                              <span className="hosp-p tabular">{Math.round(p * 100)}%</span>
+                            </div>
+                          ) : (
+                            <button type="button" className="hosp-row" onClick={toggle} aria-expanded={open}>
+                              <span className="hosp-name">{h.name}</span>
+                              <span className="hosp-sum tabular">{Math.round(h.route.duration_s / 60)}분 · 응급실 {h.er_beds ?? '-'}</span>
+                              <span className="hosp-p tabular">{Math.round(p * 100)}%</span>
+                            </button>
+                          )}
+                          <span className="hosp-bar" aria-hidden="true"><span style={{ width: `${Math.round(p * 100)}%` }} /></span>
+                          {open ? <HospitalFacts h={h} prefer={transfer.rule.prefer ?? []} /> : null}
                         </li>
                       );
                     })}
@@ -813,7 +844,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
               </>
             )}
           </section>
-          <section className="panel dispatch-card">
+          <section className="panel dispatch-card dispatch-orders-card" data-role="orders">
             <header className="panel-header"><h2 className="section-title">출동 지령</h2>
               <span className="meta">{call?.area ? `${call.area.district} ${call.area.dong}` : ''}</span></header>
             {!orders.length ? <p className="meta">{sft.reviewTurn !== null ? `${sft.reviewTurn}턴 재검토로 출동이 보류되었습니다.`

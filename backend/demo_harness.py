@@ -25,6 +25,7 @@ _THRESHOLD_BY_HEAD = {
     "dispatch": "dispatch", "urgency": "urgency", "ems_subtype": "subtype",
     "rescue_subtype": "subtype", "ems_symptom": "symptom",
 }
+_SUBTYPE_HEADS = {head for head, task in _THRESHOLD_BY_HEAD.items() if task == "subtype"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +35,7 @@ class DemoHarnessProfile:
     policy_digest: str
     thresholds: Mapping
     dispatch_overrides: Mapping
+    subtype_overrides: Mapping
     withdrawals: frozenset[str]
 
 
@@ -105,18 +107,22 @@ def load_profile(path=None):
     source = path if path is not None else os.getenv("SENTINEL_DEMO_HARNESS_PROFILE") or _DEFAULT_PATH
     try:
         profile = parse_json(Path(source).read_text(encoding="utf-8"))
-        if not isinstance(profile, dict) or profile.keys() != _PROFILE_FIELDS:
+        if not isinstance(profile, dict) or profile.keys() - {"subtype_overrides"} != _PROFILE_FIELDS:
             raise ValueError("invalid profile fields")
         version, model_id = profile["version"], profile["model_id"]
         if not _nonblank(version) or not _matches(rf"team-demo/sft/{_SLUG}@sha256:[0-9a-f]{{64}}", model_id):
             raise ValueError("invalid profile identity")
-        thresholds, overrides = profile["thresholds"], profile["dispatch_overrides"]
+        thresholds, dispatch_overrides = profile["thresholds"], profile["dispatch_overrides"]
         if (not isinstance(thresholds, dict) or thresholds.keys() != _THRESHOLD_FIELDS
                 or not all(map(_normalized, thresholds.values()))):
             raise ValueError("invalid profile thresholds")
-        if (not isinstance(overrides, dict) or not overrides.keys() <= _SENTINEL_KEYS["dispatch"].keys()
-                or not all(map(_normalized, overrides.values()))):
+        if (not isinstance(dispatch_overrides, dict) or not dispatch_overrides.keys() <= _SENTINEL_KEYS["dispatch"].keys()
+                or not all(map(_normalized, dispatch_overrides.values()))):
             raise ValueError("invalid dispatch overrides")
+        subtype_overrides = profile.get("subtype_overrides", {})
+        if (not isinstance(subtype_overrides, dict) or not subtype_overrides.keys() <= _SUBTYPE_HEADS
+                or not all(map(_normalized, subtype_overrides.values()))):
+            raise ValueError("invalid subtype overrides")
         withdrawals = profile["withdrawals"]
         if (not isinstance(withdrawals, list) or not all(map(_nonblank, withdrawals))
                 or len(set(withdrawals)) != len(withdrawals)):
@@ -125,8 +131,8 @@ def load_profile(path=None):
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     except (OSError, TypeError, ValueError, RecursionError) as exc:
         raise ValueError("demo harness profile is invalid") from exc
-    return DemoHarnessProfile(version, model_id, digest, MappingProxyType(thresholds), MappingProxyType(overrides),
-                              frozenset(withdrawals))
+    return DemoHarnessProfile(version, model_id, digest, MappingProxyType(thresholds), MappingProxyType(dispatch_overrides),
+                              MappingProxyType(subtype_overrides), frozenset(withdrawals))
 
 
 def valid_distribution(scores, expected_keys):
@@ -187,6 +193,8 @@ def _choices(probabilities, labels, profile, gate):
         threshold = profile.thresholds[_THRESHOLD_BY_HEAD[task]]
         if task == "dispatch":
             threshold = profile.dispatch_overrides.get(key, threshold)
+        else:
+            threshold = profile.subtype_overrides.get(task, threshold)
         if probability >= threshold and sum(p == probability for p in scores.values()) == 1:
             choices[task] = {"key": key, "label": labels[task][key], "p": probability}
     return choices
@@ -204,4 +212,5 @@ def apply_harness(turns, response, profile):
     choices = {variant: _choices(results[variant].get("probabilities"), labels, profile, gate)
                for variant in ("sft", "base")}
     return {"model_id": profile.model_id, "policy_digest": profile.policy_digest, "thresholds": dict(profile.thresholds),
-            "dispatch_overrides": dict(profile.dispatch_overrides), "gate": gate, "choices": choices}
+            "dispatch_overrides": dict(profile.dispatch_overrides), "subtype_overrides": dict(profile.subtype_overrides),
+            "gate": gate, "choices": choices}
