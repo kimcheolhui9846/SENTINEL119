@@ -96,6 +96,17 @@ def save_adaptation(model, output):
         model.backbone.save_pretrained(output / "adapter", safe_serialization=True, save_embedding_layers=False)
 
 
+def init_from_checkpoint(model, checkpoint):
+    """Start training from a saved head (+ LoRA adapter, kept trainable) instead of the released head."""
+    model.head = load_head(checkpoint / "decision_head.pt", next(model.head.parameters()).device)
+    model.head.requires_grad_(True)
+    if (checkpoint / "adapter").is_dir():
+        from peft import PeftModel
+        model.backbone = PeftModel.from_pretrained(model.backbone, checkpoint / "adapter", is_trainable=True)
+        model.backbone.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.train_backbone = True
+
+
 def reload_adaptation(model, output):
     model.head = load_head(output / "decision_head.pt", next(model.head.parameters()).device)
     if model.train_backbone:

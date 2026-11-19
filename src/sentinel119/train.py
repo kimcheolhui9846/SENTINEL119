@@ -1,6 +1,7 @@
 """Train/evaluate the released Zoro decision head on full-call 119 labels."""
 
 import argparse
+import hashlib
 from collections import Counter
 import importlib.metadata
 import json
@@ -372,6 +373,8 @@ def main():
     parser.add_argument("--reference-data", type=Path,
                         help="Original checkpoint dataset when evaluating a separately reserved confirm/test split")
     parser.add_argument("--checkpoint", type=Path, help="Adaptation output directory, for evaluate-only")
+    parser.add_argument("--init-checkpoint", type=Path,
+                        help="Completed run to continue training from (its head and LoRA adapter); fresh optimizer")
     parser.add_argument("--lora-targets", choices=("attention-qv", "attention", "attention-mlp"), default="attention-qv")
     parser.add_argument("--head-learning-rate", type=float, help="Defaults to --learning-rate")
     parser.add_argument("--warmup-ratio", type=float, default=0.0)
@@ -421,12 +424,14 @@ def main():
     if not math.isfinite(args.learning_rate) or args.learning_rate <= 0:
         parser.error("Learning rate must be finite and positive")
     if args.checkpoint and not args.evaluate_only:
-        parser.error("--checkpoint is for evaluation; optimizer resume is not supported")
+        parser.error("--checkpoint is for evaluation; use --init-checkpoint to continue training")
+    if args.init_checkpoint and (args.evaluate_only or args.checkpoint):
+        parser.error("--init-checkpoint is for training runs only")
     if args.reference_data and (not args.checkpoint or args.evaluate_only not in ("confirm", "test")):
         parser.error("--reference-data requires a checkpoint and a reserved confirm/test evaluation")
     if args.output.exists() and any(args.output.iterdir()):
         parser.error("Output directory must be empty; use a fresh run directory")
-    from .model import enable_lora, load_zoro, same_base
+    from .model import enable_lora, init_from_checkpoint, load_zoro, same_base
     import torch
     torch.manual_seed(args.seed)
     args.output.mkdir(parents=True, exist_ok=True)
@@ -471,7 +476,19 @@ def main():
         metadata["model"] = identity
         if prior and not same_base(prior["model"], identity):
             raise ValueError("Checkpoint uses a different base model identity")
-        if args.mode == "lora" and not args.evaluate_only:
+        if args.init_checkpoint:
+            init = json.loads((args.init_checkpoint / "run.json").read_text(encoding="utf-8"))
+            if init.get("status") != "completed" or init["mode"] != args.mode:
+                raise ValueError("--init-checkpoint must be a completed run of the same --mode")
+            if not same_base(init["model"], identity):
+                raise ValueError("--init-checkpoint uses a different base model identity")
+            files = [args.init_checkpoint / "decision_head.pt"] + (
+                [args.init_checkpoint / "adapter" / "adapter_model.safetensors"] if args.mode == "lora" else [])
+            metadata["init_checkpoint"] = {"path": str(args.init_checkpoint), "best_step": init["result"].get("best_step"),
+                                           "dataset_train_sha256": init["dataset_manifest"]["splits"]["train"]["sha256"],
+                                           "sha256": {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in files}}
+            init_from_checkpoint(model, args.init_checkpoint)
+        elif args.mode == "lora" and not args.evaluate_only:
             enable_lora(model, args.lora_rank, args.lora_alpha, args.lora_targets)
         metadata["trainable_parameters"] = sum(p.numel() for p in model.parameters() if p.requires_grad)
         metadata["trainable_names"] = [name for name, p in model.named_parameters() if p.requires_grad]
