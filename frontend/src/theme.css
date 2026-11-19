@@ -27,11 +27,11 @@
   --text: var(--ink);
   --text-dim: var(--ink-2);
   --text-faint: var(--quiet);
-  --action: var(--ink);
-  --action-strong: #0f1925;
+  --action: #2f6690;
+  --action-strong: #24506f;
   --action-ink: #ffffff;
-  --action-bg: rgba(30, 42, 56, 0.07);
-  --mint: var(--ok);
+  --action-bg: rgba(47, 102, 144, 0.1);
+  --mint: #1f8a5b;
   --mint-ink: #ffffff;
   --mint-bg: rgba(31, 138, 91, 0.09);
   --amber: var(--hold);
@@ -55,24 +55,23 @@ body, .app-shell { background: var(--paper); color: var(--ink); }
 /* Buttons: navy ink, so they belong to the content, not to the orange bar. */
 .button { border-radius: 8px; }
 .button.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
-.button.primary:hover:not(:disabled) { background: var(--action-strong); border-color: var(--action-strong); }
 .button.secondary { background: var(--surface); border-color: var(--line-strong); color: var(--ink); }
 .button.secondary:hover:not(:disabled) { border-color: var(--ink); color: var(--ink); background: var(--surface); }
-.button:disabled { opacity: 0.45; }
+.button:disabled { opacity: 0.55; }
+.button.primary:disabled { background: var(--panel-3); border-color: var(--line); color: var(--quiet); }
+.button.primary:hover:not(:disabled) { background: #0f1925; border-color: #0f1925; }
 .dispatch-bar select { background: var(--surface); border-color: var(--line-strong); color: var(--ink); border-radius: 8px; }
 .dispatch-bar .meta { color: var(--quiet); }
-.alert { background: var(--error-bg); color: var(--error-strong); border-color: transparent; border-left: 3px solid var(--danger); }
+.dispatch .alert { background: var(--error-bg); color: var(--error-strong); border-color: transparent; border-left: 3px solid var(--danger); }
 
 /* Information panels: a white sheet with a 3px rail that says which job the panel does. */
 .dispatch .dispatch-card {
   position: relative; gap: 10px; padding: 14px 16px 16px 19px; background: var(--surface);
   border: 1px solid var(--rule); border-radius: 10px;
 }
-.dispatch .dispatch-card::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px;
-  border-radius: 10px 0 0 10px; background: var(--rule); }
-.dispatch .dispatch-card[data-role="call"]::before { background: var(--ink); }
-.dispatch .dispatch-card[data-role="hospital"]::before { background: var(--ok); }
-.dispatch .dispatch-card[data-role="orders"]::before { background: var(--signal); }
+.dispatch .dispatch-card[data-role="call"] { box-shadow: inset 3px 0 0 var(--ink); }
+.dispatch .dispatch-card[data-role="hospital"] { box-shadow: inset 3px 0 0 var(--ok); }
+.dispatch .dispatch-card[data-role="orders"] { box-shadow: inset 3px 0 0 var(--signal); }
 .dispatch .panel-header { padding-bottom: 8px; border-bottom: 1px solid var(--line-soft); }
 .dispatch .section-title { font-size: 15px; letter-spacing: -0.01em; }
 .dispatch .panel-header .meta { color: var(--quiet); font-size: 12px; }
@@ -92,7 +91,6 @@ body, .app-shell { background: var(--paper); color: var(--ink); }
 
 /* Side panel: open questions keep their bars, committed ones fold to one line. */
 .dispatch-side .dispatch-card { padding-left: 16px; }
-.dispatch-side .dispatch-card::before { display: none; }
 .prob-block { background: var(--surface); border: 1px solid var(--line-soft); border-radius: 8px; }
 .prob-block .prob-head strong { color: var(--hold); }
 .prob-block.is-folded { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) auto; align-items: baseline; gap: 8px;
@@ -105,35 +103,37 @@ body, .app-shell { background: var(--paper); color: var(--ink); }
 .prob-need { background: var(--hold); }
 
 /* Map overlays: a compact console tag top-left, a narrow caption at the bottom. */
-.map-banner {
+.dispatch-map-wrap .map-banner {
   left: 14px; right: auto; top: 14px; transform: none; display: flex; align-items: stretch; gap: 0;
   min-width: 0; max-width: min(460px, 70%); padding: 0; text-align: left; border: 0; border-radius: 10px;
   overflow: hidden; background: var(--surface); color: var(--ink); box-shadow: 0 6px 18px rgba(30, 42, 56, 0.16);
   animation: none;
 }
-.mb-state { display: grid; place-items: center; min-width: 92px; padding: 0 12px; color: #fff; font-size: 17px;
+.dispatch-map-wrap .mb-state { display: grid; place-items: center; min-width: 92px; padding: 0 12px; color: #fff; font-size: 17px;
   font-weight: 900; letter-spacing: 0.03em; background: var(--quiet); }
-.map-banner[data-state="wait"] .mb-state { background: var(--hold); }
-.map-banner[data-state="commit"] .mb-state { background: var(--ok); }
-.mb-body { display: grid; gap: 1px; padding: 8px 12px 9px; }
-.map-banner strong { font-size: 16px; color: var(--ink); letter-spacing: 0; }
-.map-banner[data-state="wait"] strong, .map-banner[data-state="commit"] strong { color: var(--ink); }
-.map-banner[data-state="wait"], .map-banner[data-state="commit"] { background: var(--surface); }
-.map-banner-tag { font-size: 11px; color: var(--quiet); }
-.map-banner-detail { font-size: 13px; color: var(--ink-2); }
-.map-banner-detail .hl-label { color: var(--ink); font-size: 14px; }
-.map-banner-detail .hl-prob { color: var(--hold); font-size: 15px; }
-.map-banner-detail .hl-need { color: var(--ink-2); }
-.map-banner-detail .hl-unit { color: var(--ok); font-size: 14px; }
-.map-banner[data-state="commit"] { animation: commit-flash 900ms ease-out 1; }
+.dispatch-map-wrap .map-banner[data-state="wait"] .mb-state { background: var(--hold); }
+.dispatch-map-wrap .map-banner[data-state="commit"] .mb-state { background: var(--ok); }
+.dispatch-map-wrap .mb-body { display: grid; gap: 1px; padding: 8px 12px 9px; }
+.dispatch-map-wrap .map-banner strong { font-size: 16px; color: var(--ink); letter-spacing: 0; }
+.dispatch-map-wrap .map-banner[data-state="wait"] strong, .dispatch-map-wrap .map-banner[data-state="commit"] strong { color: var(--ink); }
+.dispatch-map-wrap .map-banner[data-state="wait"], .dispatch-map-wrap .map-banner[data-state="commit"] { background: var(--surface); }
+.dispatch-map-wrap .map-banner-tag { font-size: 11px; color: var(--quiet); }
+.dispatch-map-wrap .map-banner-detail { font-size: 13px; color: var(--ink-2); }
+.dispatch-map-wrap .map-banner-detail .hl-label { color: var(--ink); font-size: 14px; }
+.dispatch-map-wrap .map-banner-detail .hl-prob { color: var(--hold); font-size: 15px; }
+.dispatch-map-wrap .map-banner-detail .hl-need { color: var(--ink-2); }
+.dispatch-map-wrap .map-banner-detail .hl-task { color: var(--ink-2); }
+.dispatch-map-wrap .map-banner-detail .hl-sep { color: var(--quiet); }
+.dispatch-map-wrap .map-banner-detail .hl-unit { color: var(--ok); font-size: 14px; }
+.dispatch-map-wrap .map-banner[data-state="commit"] { animation: commit-flash 900ms ease-out 1; }
 @keyframes commit-flash { 0% { box-shadow: 0 0 0 0 rgba(31, 138, 91, 0.55); } 100% { box-shadow: 0 0 0 14px rgba(31, 138, 91, 0); } }
-@media (prefers-reduced-motion: reduce) { .map-banner[data-state="commit"] { animation: none; } }
-.map-caption { bottom: 46px; width: min(640px, 78%); padding: 8px 14px; border-radius: 10px;
+@media (prefers-reduced-motion: reduce) { .dispatch-map-wrap .map-banner[data-state="commit"] { animation: none; } }
+.dispatch-map-wrap .map-caption { bottom: 46px; width: min(640px, 78%); padding: 8px 14px; border-radius: 10px;
   background: rgba(30, 42, 56, 0.9); border-left-width: 4px; animation: none; }
-.map-caption p { margin-top: 1px; font-size: 17px; line-height: 1.4; color: #fff; }
-.map-caption-who { font-size: 12px; }
-.map-caption[data-speaker="1"] { --who: #c3b1f2; }
-.map-caption[data-speaker="0"] { --who: #b9c3cf; }
+.dispatch-map-wrap .map-caption p { margin-top: 1px; font-size: 17px; line-height: 1.4; color: #fff; }
+.dispatch-map-wrap .map-caption-who { font-size: 12px; }
+.dispatch-map-wrap .map-caption[data-speaker="1"] { --who: #c3b1f2; }
+.dispatch-map-wrap .map-caption[data-speaker="0"] { --who: #b9c3cf; }
 .map-follow { background: var(--surface); color: var(--ink-2); border-color: var(--rule); }
 .map-follow.is-on { color: var(--ok); border-color: var(--ok); }
 .dispatch-legend { background: rgba(255, 255, 255, 0.94); }
@@ -172,3 +172,7 @@ li[data-chosen="true"] .hosp-bar span { background: var(--ok); }
 .do-head .is-treat { color: var(--hold); }
 .do-head .is-transport { color: var(--ink-2); }
 .do-source { color: var(--quiet); }
+
+/* The live region wrapper takes no space; the tile notice moves below the banner. */
+.map-banner-live { position: static; }
+.dispatch-map-alert { top: auto; bottom: 64px; }

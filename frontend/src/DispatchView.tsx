@@ -88,8 +88,9 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfe
 
   useEffect(() => {
     if (!element.current) return;
-    const map = L.map(element.current, { zoomSnap: 0.5, minZoom: 10, maxZoom: 18, scrollWheelZoom: true })
+    const map = L.map(element.current, { zoomSnap: 0.5, minZoom: 10, maxZoom: 18, scrollWheelZoom: true, zoomControl: false })
       .setView([37.5665, 126.978], 11);
+    L.control.zoom({ position: 'topright' }).addTo(map);
     map.attributionControl.setPrefix(false);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · 소방관서 위치 OSM',
@@ -419,7 +420,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
 
   const reset = useCallback(() => {
     run.current += 1; sentKey.current = ''; transferKey.current = ''; setTransfer(null); setTransferSymptom(null);
-    lastTransfer.current = null; setTransport(null);
+    lastTransfer.current = null; setTransport(null); setOpenHospitals([]);
     asked.current = new Set();
     setPlaying(false); setBusy(false); setLines([]); setSft(emptyZoro()); setBase(emptyZoro()); setOrders([]);
     setError(null); setShowGold(false);
@@ -642,13 +643,15 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
 
   const overlay = (
     <>
-      <div className="map-banner" data-state={banner.state} key={`b-${lines.length}-${banner.state}`} aria-live="polite">
+      <div className="map-banner-live" aria-live="polite" aria-atomic="true">
+      <div className="map-banner" data-state={banner.state} key={`b-${lines.length}-${banner.state}`}>
         <span className="mb-state">{banner.state === 'commit' ? 'COMMIT' : banner.state === 'wait' ? 'WAIT' : '대기'}</span>
         <span className="mb-body">
           <span className="map-banner-tag">SENTINEL_ZORO {lines.length ? `${lines.length}턴` : ''}{last?.ms ? ` · ${Math.round(last.ms)}ms` : ''}</span>
           <strong>{banner.title}</strong>
           {banner.detail ? <span className="map-banner-detail">{banner.detail}</span> : null}
         </span>
+      </div>
       </div>
       {last ? (
         <div className="map-caption" data-speaker={last.speaker} key={`c-${lines.length}`}>
@@ -757,11 +760,19 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
                       const toggle = () => setOpenHospitals((ids) => ids.includes(h.hpid) ? ids.filter((x) => x !== h.hpid) : [...ids, h.hpid]);
                       return (
                         <li key={h.hpid} data-chosen={chosen} data-open={open}>
-                          <button type="button" className="hosp-row" onClick={chosen ? undefined : toggle} aria-expanded={open} disabled={chosen}>
-                            <span className="hosp-name">{chosen ? <span className="hosp-pick">이송</span> : null}{h.name}</span>
-                            <span className="hosp-sum tabular">{Math.round(h.route.duration_s / 60)}분 · 응급실 {h.er_beds ?? '-'}</span>
-                            <span className="hosp-p tabular">{Math.round(p * 100)}%</span>
-                          </button>
+                          {chosen ? (
+                            <div className="hosp-row">
+                              <span className="hosp-name"><span className="hosp-pick">이송</span>{h.name}</span>
+                              <span className="hosp-sum tabular">{Math.round(h.route.duration_s / 60)}분 · 응급실 {h.er_beds ?? '-'}</span>
+                              <span className="hosp-p tabular">{Math.round(p * 100)}%</span>
+                            </div>
+                          ) : (
+                            <button type="button" className="hosp-row" onClick={toggle} aria-expanded={open}>
+                              <span className="hosp-name">{h.name}</span>
+                              <span className="hosp-sum tabular">{Math.round(h.route.duration_s / 60)}분 · 응급실 {h.er_beds ?? '-'}</span>
+                              <span className="hosp-p tabular">{Math.round(p * 100)}%</span>
+                            </button>
+                          )}
                           <span className="hosp-bar" aria-hidden="true"><span style={{ width: `${Math.round(p * 100)}%` }} /></span>
                           {open ? <HospitalFacts h={h} prefer={transfer.rule.prefer ?? []} /> : null}
                         </li>
