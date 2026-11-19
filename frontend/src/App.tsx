@@ -73,7 +73,9 @@ export default function App() {
 
   function changeSelection(id: string, nextMode: Mode) {
     setDraft('');
-    void open(id, nextMode);
+    // Call files have no reviewed fixture; they run on the live model only.
+    const liveOnly = scenarios.find((item) => item.id === id)?.live_only;
+    void open(id, liveOnly ? 'live' : nextMode);
   }
 
   async function submitText(event: FormEvent<HTMLFormElement>) {
@@ -145,20 +147,21 @@ export default function App() {
           <div className="scenario-info">
             <strong>{selected?.title ?? '신고 시나리오'}</strong>
             {selected && <p>{selected.summary}</p>}
-            <span className="meta">합성 신고 · 가상 차량 및 병원</span>
+            <span className="meta">{selected?.private ? '실제 통화 (AI Hub 유보 평가셋, 로컬 시연 전용) · 가상 차량 및 병원'
+              : selected?.live_only ? '가상 통화 · 모델 확률로 확정 · 가상 차량 및 병원' : '합성 신고 · 가상 차량 및 병원'}</span>
           </div>
           <div className="toolbar">
             <label>시나리오
               <select aria-label="시나리오" value={scenarioId} disabled={!scenarios.length}
                 onChange={(event) => changeSelection(event.target.value, mode)}>
                 {!scenarios.length && <option value="">선택할 시나리오 없음</option>}
-                {scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.title}</option>)}
+                {scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.private ? '★ ' : ''}{scenario.title}</option>)}
               </select>
             </label>
             <label>실행 모드
               <select aria-label="실행 모드" value={mode} disabled={!scenarioId}
                 onChange={(event) => changeSelection(scenarioId, event.target.value as Mode)}>
-                <option value="simulation">시뮬레이션</option>
+                <option value="simulation" disabled={!!selected?.live_only}>시뮬레이션</option>
                 <option value="live">실시간 Zoro</option>
               </select>
             </label>

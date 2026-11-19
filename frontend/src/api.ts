@@ -6,7 +6,11 @@ export type SessionEvent =
   | { action: 'text'; text: string }
   | DispatchEvent;
 
-export interface Scenario { id: string; title: string; summary: string; turn_count: number }
+export interface Scenario { id: string; title: string; summary: string; turn_count: number; live_only?: boolean; private?: boolean }
+export interface HierarchyItem {
+  question: string; parent: string; probabilities: Record<string, number>; threshold: number;
+  status: 'WAIT' | 'COMMIT'; choice: string | null; turn: number | null;
+}
 export interface Candidate {
   id: string; name: string; availability: 'available' | 'unavailable' | 'unknown';
   eta_min: number | null; detail: string; source: string; source_at: string | null;
@@ -29,6 +33,7 @@ export interface Session {
   location: string | null; external_status: 'ok' | 'unknown' | 'timeout' | 'cached';
   history: { id: number; turn_id: number; task: string; status: string; choice: string | null; reason: string }[];
   applied_vehicle: string | null; error: string | null;
+  hierarchy?: Partial<Record<'subtype' | 'symptom', HierarchyItem>>;
 }
 
 const messages: Record<string, string> = {
@@ -41,6 +46,7 @@ const messages: Record<string, string> = {
   replay_finished: '신고 재생이 끝났습니다.',
   turn_limit: '이 세션의 입력 한도에 도달했습니다.',
   session_capacity: '현재 세션이 많습니다. 잠시 뒤 다시 시도해 주세요.',
+  live_only_scenario: '실제 통화는 실시간 Zoro 모드에서만 재생합니다.',
 };
 
 export class ApiError extends Error {

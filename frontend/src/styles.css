@@ -1100,3 +1100,5 @@ textarea:focus-visible, select:focus-visible, input:focus-visible {
 .compare .dev-precision th, .dev-precision td { text-align: left; padding: 4px var(--s2); border-bottom: 1px solid var(--line); }
 .compare .dev-precision td strong { color: var(--commit); }
 .compare .dev-precision p { font-size: 13px; margin-top: var(--s2); }
+.hierarchy-probs { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 2px; font-size: 13px; color: var(--text-dim); }
+.hierarchy-probs li { display: flex; justify-content: space-between; gap: 8px; }

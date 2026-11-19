@@ -1,4 +1,14 @@
-"""Synthetic Seoul call replays. Only the current frame leaves this provider."""
+"""Synthetic Seoul call replays. Only the current frame leaves this provider.
+
+SENTINEL_SCENARIO_DIRS (os.pathsep-separated) adds turn-wise call files ({id, title, summary,
+turns: [{speaker: 0 dispatcher | 1 caller, text}], gold?}). They run in live mode only: there is no
+reviewed fixture, so the model's confidence decides WAIT/COMMIT. Files under a "private" directory are
+real AI Hub calls for local demos; keep them out of the repository.
+"""
+
+import json
+import os
+from pathlib import Path
 
 
 _CATALOG = {
@@ -21,9 +31,32 @@ _CATALOG = {
 }
 
 
+def _call_files():
+    calls = {}
+    for root in filter(None, os.getenv("SENTINEL_SCENARIO_DIRS", "").split(os.pathsep)):
+        for path in sorted(Path(root).glob("*.json")):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            turns = [("수보요원" if turn["speaker"] == 0 else "신고자", turn["text"]) for turn in data["turns"]]
+            calls[data["id"]] = {"title": data["title"], "summary": data.get("summary", ""), "turns": turns,
+                                 "gold": data.get("gold"), "private": "private" in path.parts}
+    return calls
+
+
 def list_scenarios():
-    return [{"id": key, "title": title, "summary": summary, "turn_count": len(turns)}
-            for key, (title, summary, turns) in _CATALOG.items()]
+    synthetic = [{"id": key, "title": title, "summary": summary, "turn_count": len(turns), "live_only": False}
+                 for key, (title, summary, turns) in _CATALOG.items()]
+    calls = [{"id": key, "title": call["title"], "summary": call["summary"], "turn_count": len(call["turns"]),
+              "live_only": True, "private": call["private"]} for key, call in _call_files().items()]
+    return synthetic + calls
+
+
+def _call_frame(call, step):
+    """Turn replay with the staged virtual vehicles and hospitals; nothing here reviews the labels."""
+    staged = get_frame("staged", 3)
+    speaker, text = call["turns"][step - 1] if step else ("", "")
+    return {**staged, "speaker": speaker, "text": text, "supports": {}, "simulation_choices": {},
+            "location": ("가상 위치 · 실제 주소 비공개", 1) if step else None,
+            "external_status": "ok" if step else "unknown"}
 
 
 def _candidate(key, name, minutes, detail, status, source, source_at):
@@ -33,6 +66,11 @@ def _candidate(key, name, minutes, detail, status, source, source_at):
 
 def get_frame(scenario_id, step, hospital_retry=False):
     """Return fresh, caller-owned containers. Step zero is the empty incident."""
+    if scenario_id not in _CATALOG:
+        call = _call_files()[scenario_id]
+        if not 0 <= step <= len(call["turns"]):
+            raise ValueError("stage_out_of_range")
+        return _call_frame(call, step)
     _, _, turns = _CATALOG[scenario_id]
     if not 0 <= step <= len(turns):
         raise ValueError("stage_out_of_range")
