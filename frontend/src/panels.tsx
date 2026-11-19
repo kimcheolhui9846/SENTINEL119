@@ -40,7 +40,9 @@ function DecisionCard({ task, decision, session }: { task: Task; decision: Decis
   const { name, role } = taskInfo[task];
   const { status, choice, evidence_turn_ids: evidence, probabilities, execution } = decision;
   return (
-    <article className="decision-card" data-status={status} aria-labelledby={`task-${task}`}>
+    <article className="decision-card" data-status={status} data-task={task}
+      data-tier={task === 'dispatch' || task === 'urgency' ? 'primary' : 'secondary'}
+      data-execution={execution === 'error' ? 'error' : undefined} aria-labelledby={`task-${task}`}>
       <div className="meta">{role}</div>
       <div className="card-heading">
         <h3 id={`task-${task}`} className="card-name">{name}</h3>
@@ -49,11 +51,11 @@ function DecisionCard({ task, decision, session }: { task: Task; decision: Decis
       <p className="choice">
         {choice ? choiceName(session, task, choice) : status === 'OUT_OF_SCOPE' ? '해당 없음' : '판단 대기'}
       </p>
-      {execution === 'running' && <p className="meta">판단 중</p>}
       {execution === 'error' && <span className="status error">실행 오류</span>}
+      {execution === 'running' && <p className="meta">판단 중</p>}
       <p className="reason">{decision.reason}</p>
       <details className="evidence">
-        <summary>근거 및 세부 정보</summary>
+        <summary>근거 및 세부 정보{evidence.length > 0 && <span className="evidence-count">근거 {evidence.length}건</span>}</summary>
         {evidence.length ? (
           <ul>
             {evidence.map((id) => {

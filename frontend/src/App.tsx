@@ -1,11 +1,15 @@
 import { useState } from 'react';
-import type { FormEvent, KeyboardEvent } from 'react';
+import type { FormEvent, KeyboardEvent, MouseEvent } from 'react';
 import type { DispatchEvent, Mode, Session } from './api';
+import { HospitalMap } from './HospitalMap';
+import { DrillPanel } from './DrillPanel';
 import { CandidatePanel, candidateName, DecisionsPanel, HistoryPanel } from './panels';
 import { useConsole } from './useConsole';
 import './styles.css';
 
-type Page = 'workspace' | 'history';
+const pages = ['workspace', 'history', 'drill'] as const;
+type Page = typeof pages[number];
+const pageNames = { workspace: '관제 화면', history: '판단 이력', drill: '자동 모의훈련' };
 
 function Transcript({ session }: { session: Session }) {
   if (!session.turns.length) {
@@ -53,7 +57,8 @@ export default function App() {
   const consoleState = useConsole();
   const { scenarios, scenarioId, mode, session, busy, autoPlay, problem, canNext, canRetry,
     open, retry, send, setAutoPlay } = consoleState;
-  const [page, setPage] = useState<Page>('workspace');
+  const [page, setPage] = useState<Page>(window.location.hash === '#drill' ? 'drill' : 'workspace');
+  const [drillOpened, setDrillOpened] = useState(page === 'drill');
   const [draft, setDraft] = useState('');
   const selected = scenarios.find((item) => item.id === scenarioId);
   const modeLabel = mode === 'live' ? '실시간 Zoro' : '시뮬레이션';
@@ -74,13 +79,32 @@ export default function App() {
     if (await send({ action: 'text', text: message })) setDraft((value) => value === draft ? '' : value);
   }
 
+  function goToMap(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    setPage('workspace');
+    window.setTimeout(() => {
+      const target = document.getElementById('nmc-map');
+      target?.scrollIntoView({ block: 'start' });
+      target?.focus({ preventScroll: true });
+    }, 0);
+  }
+
+  function selectPage(next: Page) {
+    if (next === 'drill') {
+      setDrillOpened(true);
+      setAutoPlay(false);
+    }
+    setPage(next);
+  }
+
   function switchTab(event: KeyboardEvent<HTMLButtonElement>) {
     const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
     if (!keys.includes(event.key)) return;
     event.preventDefault();
-    const next = event.key === 'Home' ? 'workspace' : event.key === 'End' ? 'history'
-      : page === 'workspace' ? 'history' : 'workspace';
-    setPage(next);
+    const index = pages.indexOf(page);
+    const next = event.key === 'Home' ? pages[0] : event.key === 'End' ? pages[pages.length - 1]
+      : pages[(index + (event.key === 'ArrowLeft' ? -1 : 1) + pages.length) % pages.length];
+    selectPage(next);
     document.getElementById(`tab-${next}`)?.focus();
   }
 
@@ -90,21 +114,26 @@ export default function App() {
         <div className="brand"><span className="brand-mark" aria-hidden="true">+</span><span className="brand-name">SENTINEL 119</span></div>
         <nav className="nav-tabs" aria-label="관제 메뉴">
           <div role="tablist" aria-label="관제 보기">
-            {(['workspace', 'history'] as const).map((tab) => (
+            {pages.map((tab) => (
               <button type="button" key={tab} id={`tab-${tab}`} role="tab"
                 className={`nav-tab${page === tab ? ' active' : ''}`} aria-selected={page === tab}
                 aria-controls={`page-${tab}`} tabIndex={page === tab ? 0 : -1} onKeyDown={switchTab}
-                onClick={() => setPage(tab)}>{tab === 'workspace' ? '관제 화면' : '판단 이력'}</button>
+                onClick={() => selectPage(tab)}>{pageNames[tab]}</button>
             ))}
           </div>
         </nav>
-        <span className="mode-indicator" data-mode={mode}>{modeLabel}</span>
+        {page !== 'drill' && <span className="mode-indicator" data-mode={mode}>{modeLabel}</span>}
       </header>
 
       <main className="main">
+        {page !== 'drill' && <>
         <header className="page-heading">
           <h1 className="workspace-title">신고 관제</h1>
-          {session?.location && <span className="meta">확인된 위치 · {session.location}</span>}
+          <p className="location-field" data-known={session?.location ? 'true' : 'false'}>
+            <span className="field-label">신고 위치</span>
+            <strong className="field-value" aria-live="polite">{session?.location || '확인 전'}</strong>
+          </p>
+          <a className="map-link" href="#nmc-map" onClick={goToMap}>병원 지도</a>
         </header>
 
         <section className="scenario-bar" aria-label="시나리오 설정">
@@ -140,6 +169,7 @@ export default function App() {
               onClick={() => void retry()}>재시도</button>}
           </div>
         )}
+        </>}
 
         <div id="page-workspace" role="tabpanel" aria-labelledby="tab-workspace" hidden={page !== 'workspace'}>
           {!session ? <p className="empty-state">{busy ? '신고 정보를 불러오는 중입니다.' : '시나리오를 선택해 신고를 시작하세요.'}</p> : (
@@ -180,18 +210,30 @@ export default function App() {
 
               <div className="workspace-detail">
                 <DecisionsPanel session={session} />
-                <div className="resources-grid">
-                  <CandidatePanel kind="vehicle" session={session} />
-                  <CandidatePanel kind="hospital" session={session} />
+                <div className="resources-block">
+                  <p className="resources-note">가상 출동 후보입니다. 아래 지도에서 공공데이터에 등록된 병·의원 위치를 확인할 수 있습니다.</p>
+                  <div className="resources-grid">
+                    <CandidatePanel kind="vehicle" session={session} />
+                    <CandidatePanel kind="hospital" session={session} />
+                  </div>
                 </div>
                 <DispatchPanel session={session} disabled={busy || !!problem?.recovery}
                   onDispatch={(event) => void send(event, session)} />
               </div>
             </div>
           )}
+          {page === 'workspace' && (
+            <div id="nmc-map" className="map-region" tabIndex={-1}>
+              <p className="map-caption">국립중앙의료원 병·의원 위치 자료</p>
+              <HospitalMap />
+            </div>
+          )}
         </div>
         <div id="page-history" role="tabpanel" aria-labelledby="tab-history" hidden={page !== 'history'}>
           {page === 'history' && (session ? <HistoryPanel session={session} /> : <p className="empty-state">신고를 열면 판단 이력을 확인할 수 있습니다.</p>)}
+        </div>
+        <div id="page-drill" role="tabpanel" aria-labelledby="tab-drill" hidden={page !== 'drill'}>
+          {drillOpened && <DrillPanel />}
         </div>
       </main>
     </div>
