@@ -458,13 +458,13 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   const done = !live && !!call && lines.length >= call.turns.length && !busy;
 
   // After the call: why Zoro chose that hospital (its own reasoning + leave-one-group-out influence).
-  const explainChoice = useCallback(async () => {
+  const explainChoice = useCallback(async (withReasoning = false) => {
     if (!lastTransfer.current || reasoning) return;
     const myRun = run.current;
     setReasoning(true);
     try {
       const turns = lines.map(({ speaker, text }) => ({ speaker, text }));
-      const res = await dispatchApi.transfer({ ...lastTransfer.current, turns, explain: true });
+      const res = await dispatchApi.transfer({ ...lastTransfer.current, turns, explain: true, reason: withReasoning });
       if (myRun === run.current) { setTransfer(res); setReason(res.reason ?? null); }
     } catch { /* keep the current recommendation */ } finally {
       if (myRun === run.current) setReasoning(false);
@@ -663,35 +663,36 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
                 {reason ? (
                   <div className="reason-box">
                     <h3>선택 이유</h3>
+                    {reason.summary.map((line, i) => <p key={i} className={i === 0 ? 'reason-lead' : 'reason-line'}>{line}</p>)}
+                    <details className="reason-more">
+                      <summary>정보별 영향 자세히</summary>
+                      <ul className="reason-effects">
+                        {reason.effects.map((e) => (
+                          <li key={e.group} data-sign={e.delta > 0.02 ? 'plus' : e.delta < -0.02 ? 'minus' : 'zero'}>
+                            <span>{e.group}</span>
+                            <b className="tabular">{e.delta > 0 ? '+' : ''}{Math.round(e.delta * 100)}%p</b>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="do-source">{reason.method}. +는 그 정보가 선택을 뒷받침, −는 그 정보가 오히려 선택 확률을 낮춘 경우입니다.</p>
+                    </details>
                     {reason.reasoned ? (
-                      <>
-                        <p className="reason-head">Zoro 추론 원문 (영어로 생각 · {(reason.reasoned.ms / 1000).toFixed(1)}초 · {reason.reasoned.tokens}토큰
-                          {reason.reasoned.finished ? '' : ' · 길이 제한으로 중간까지'}) → <b>{reason.reasoned.choice_name}</b>{' '}
+                      <details className="reason-more" open>
+                        <summary>Zoro 추론 원문 (실험 · 영어로 생각 · {(reason.reasoned.ms / 1000).toFixed(1)}초{reason.reasoned.finished ? '' : ' · 중간까지'})</summary>
+                        <p className="reason-head">추론 후 판단: <b>{reason.reasoned.choice_name}</b>{' '}
                           <b className="hl-prob">{Math.round((reason.reasoned.reasoned[reason.reasoned.choice] ?? 0) * 100)}%</b>
-                          <span className="meta"> (추론 전 {Math.round((reason.reasoned.direct[reason.reasoned.choice] ?? 0) * 100)}%)</span></p>
-                        {reason.reasoned.choice !== transfer.zoro?.choice ? (
-                          <p className="reason-flip">추론 후 선택이 바뀌었습니다: 직접 판단 {reason.chosen} → 추론 후 {reason.reasoned.choice_name}.
-                            지도의 이송 경로는 직접 판단 기준이며, 최종 결정은 구급대원·의료지도에 따릅니다.</p>
-                        ) : <p className="reason-same">추론 후에도 같은 병원을 선택했습니다.</p>}
+                          {reason.reasoned.choice !== transfer.zoro?.choice
+                            ? <span className="reason-flip"> · 직접 판단과 다름 (이송 경로는 직접 판단 기준)</span> : null}</p>
                         <p className="reason-text">{reason.reasoned.text}</p>
-                      </>
-                    ) : <p className="meta">Zoro 추론을 불러오지 못했습니다.</p>}
-                    {reason.facts.length ? (
-                      <p className="reason-facts"><b>{reason.chosen}</b> vs 2순위 {reason.runner_up}: {reason.facts.join(' · ')}</p>
-                    ) : null}
-                    <ul className="reason-effects">
-                      {reason.effects.map((e) => (
-                        <li key={e.group} data-sign={e.delta > 0.02 ? 'plus' : e.delta < -0.02 ? 'minus' : 'zero'}>
-                          <span>{e.group}</span>
-                          <b className="tabular">{e.delta > 0 ? '+' : ''}{Math.round(e.delta * 100)}%p</b>
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="do-source">정보별 영향: {reason.method}. +는 그 정보가 선택을 뒷받침, −는 그 정보가 오히려 선택 확률을 낮춘 경우입니다.</p>
+                      </details>
+                    ) : (
+                      <button type="button" className="button secondary reason-try" disabled={reasoning} onClick={() => void explainChoice(true)}>
+                        {reasoning ? 'Zoro가 추론을 쓰는 중… (5~15초)' : 'Zoro 추론 원문 보기 (실험, 수 초)'}</button>
+                    )}
                   </div>
                 ) : done || live ? (
                   <button type="button" className="button secondary" disabled={reasoning || !lastTransfer.current} onClick={() => void explainChoice()}>
-                    {reasoning ? 'Zoro가 선택 이유를 쓰는 중… (수 초)' : 'Zoro 선택 이유 보기'}</button>
+                    {reasoning ? '선택 이유 계산 중…' : '선택 이유 보기'}</button>
                 ) : null}
               </>
             )}

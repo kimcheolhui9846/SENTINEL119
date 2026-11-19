@@ -296,6 +296,35 @@ def _facts(chosen, other, rule):
     return out
 
 
+def _summary(best, runner, effects, p, rule):
+    """Two or three Korean sentences from the measured influence and the runner-up comparison (no generation)."""
+    out = [f"이송 병원으로 {best['name']}을(를) 선택했습니다 ({round(p * 100)}%)."]
+    top = effects[0] if effects and effects[0]["delta"] > 0.02 else None
+    if top:
+        detail = ""
+        if top["group"] == "병원 메시지":
+            if runner and runner["messages"] and not best["messages"]:
+                detail = f" 2순위 {runner['name']}에 '{runner['messages'][0][:30]}' 공지가 있었습니다."
+            elif best["messages"]:
+                detail = f" 선택한 병원의 공지: '{best['messages'][0][:30]}'."
+        elif top["group"] == "가용 병상" and best.get("er_beds") is not None:
+            detail = f" 선택한 병원의 응급실 가용 병상은 {best['er_beds']}개입니다."
+        elif top["group"] == "필요 처치 가능 여부":
+            ok = [x for x in rule["prefer"] if x in best["accepts"]]
+            detail = f" 선택한 병원은 {', '.join(ok)}이(가) 가능합니다." if ok else ""
+        elif top["group"] == "도착 시간":
+            detail = f" 도착까지 약 {round(best['route']['duration_s'] / 60)}분입니다."
+        out.append(f"가장 크게 작용한 정보는 {top['group']}입니다. 이 정보를 빼면 선택 확률이 "
+                   f"{round(top['delta'] * 100)}%p 내려갑니다.{detail}")
+    else:
+        out.append("어느 한 정보가 결정적이지 않았고, 여러 정보를 함께 반영한 선택입니다.")
+    if runner:
+        facts = _facts(best, runner, rule)
+        if facts:
+            out.append(f"2순위 {runner['name']}와(과) 비교하면 " + ", ".join(facts) + ".")
+    return out
+
+
 async def explain(turns, rule, hospitals, full):
     """Leave-one-group-out: how much the chosen hospital's probability drops without each information group."""
     chosen = full["choice"]
@@ -312,6 +341,7 @@ async def explain(turns, rule, hospitals, full):
     best = next(h for h in hospitals if h["hpid"] == chosen)
     runner = ranked[1] if len(ranked) > 1 else None
     return {"chosen": best["name"], "p": full["probabilities"][chosen], "effects": effects,
+            "summary": _summary(best, runner, effects, full["probabilities"][chosen], rule),
             "runner_up": runner["name"] if runner else None,
             "runner_up_p": full["probabilities"][runner["hpid"]] if runner else None,
             "facts": _facts(best, runner, rule) if runner else [],
@@ -347,6 +377,7 @@ class TransferRequest(BaseModel):
     symptom: str | None = None
     urgency: str | None = None
     explain: bool = False
+    reason: bool = False  # also run Zoro-1 reasoned action (slow, experimental)
 
 
 router = APIRouter(prefix="/api/map")
@@ -365,8 +396,11 @@ async def transfer(body: TransferRequest):
     choice = await zoro_choice(turns, rule, hospitals) if status == "ok" else None
     reason = None
     if body.explain and choice:
-        reason, reasoned = await asyncio.gather(explain(turns, rule, hospitals, choice),
-                                                zoro_reason(turns, rule, hospitals, choice["question"]))
+        if body.reason:
+            reason, reasoned = await asyncio.gather(explain(turns, rule, hospitals, choice),
+                                                    zoro_reason(turns, rule, hospitals, choice["question"]))
+        else:
+            reason, reasoned = await explain(turns, rule, hospitals, choice), None
         reason["reasoned"] = reasoned
     for h in hospitals:
         h["context"] = _criterion(h, rule)

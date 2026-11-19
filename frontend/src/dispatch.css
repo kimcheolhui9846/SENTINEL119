@@ -156,3 +156,8 @@
 .reason-effects li[data-sign="zero"] b { color: var(--text-faint); }
 .reason-flip { margin: 0; font-size: 13px; font-weight: 700; color: var(--amber); }
 .reason-same { margin: 0; font-size: 13px; font-weight: 700; color: var(--mint); }
+.reason-lead { margin: 0; font-size: 15px; font-weight: 800; color: var(--mint); }
+.reason-line { margin: 0; font-size: 14px; line-height: 1.5; }
+.reason-more summary { cursor: pointer; font-size: 13px; color: var(--action-strong); }
+.reason-more[open] { display: grid; gap: 6px; }
+.reason-try { justify-self: start; font-size: 13px; }
