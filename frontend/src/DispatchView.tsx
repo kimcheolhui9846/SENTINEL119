@@ -252,8 +252,8 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
   const [patrols, setPatrols] = useState<Patrol[]>([]);
   const [labels, setLabels] = useState<Labels | null>(null);
   const [transfer, setTransfer] = useState<TransferResponse | null>(null);
-  // Urgency the transfer rule used: committed, or the current top estimate while urgency is still WAIT.
-  const [transferUrgency, setTransferUrgency] = useState<{ label: string; p: number; committed: boolean } | null>(null);
+  // Main symptom the transfer rule used: committed, or the current top estimate while it is still WAIT.
+  const [transferSymptom, setTransferSymptom] = useState<{ label: string; p: number; committed: boolean } | null>(null);
   const transferKey = useRef('');
   const positions = useRef<Record<string, Point>>({});
   const run = useRef(0);
@@ -270,7 +270,7 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
   useEffect(() => { const id = window.setInterval(() => setNow(performance.now()), 500); return () => window.clearInterval(id); }, []);
 
   const reset = useCallback(() => {
-    run.current += 1; sentKey.current = ''; transferKey.current = ''; setTransfer(null); setTransferUrgency(null);
+    run.current += 1; sentKey.current = ''; transferKey.current = ''; setTransfer(null); setTransferSymptom(null);
     setPlaying(false); setBusy(false); setLines([]); setSft(emptyZoro()); setBase(emptyZoro()); setOrders([]);
     setError(null); setShowGold(false);
   }, []);
@@ -302,23 +302,23 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
     ]);
   }, [call]);
 
-  // EMS only: as soon as 구급 is committed, pick the transfer hospital (KB rule + NMC live beds + Zoro choice).
-  // Until urgency commits the rule uses its current top estimate, and refreshes when that estimate changes.
+  // EMS only: as soon as 구급 is committed, pick the transfer hospital (KB rule + NMC live data + Zoro choice).
+  // The main symptom chooses the rule; until it commits, its current top estimate is used and refreshed.
   const syncTransfer = useCallback(async (state: ZoroState, turns: { speaker: 0 | 1; text: string }[], labels: Labels) => {
     const c = state.commits;
     if (c.dispatch?.label !== '구급' || !call?.area) return;
-    const dist = state.probs?.urgency;
+    const dist = state.probs?.ems_symptom;
     const top = dist ? Object.entries(dist).sort((a, b) => b[1] - a[1])[0] : undefined;
-    const urgency = c.urgency ? { label: c.urgency.label, p: c.urgency.p, committed: true }
-      : top ? { label: labels.urgency?.[top[0]] ?? top[0], p: top[1], committed: false } : null;
-    const key = [c.subtype?.label, c.symptom?.label, urgency?.label, urgency?.committed].join('|');
+    const symptom = c.symptom ? { label: c.symptom.label, p: c.symptom.p, committed: true }
+      : top ? { label: labels.ems_symptom?.[top[0]] ?? top[0], p: top[1], committed: false } : null;
+    const key = [c.subtype?.label, symptom?.label, symptom?.committed, c.urgency?.label].join('|');
     if (key === transferKey.current) return;
     transferKey.current = key;
     const myRun = run.current;
     try {
       const res = await dispatchApi.transfer({ ...call.area.center, turns, subtype: c.subtype?.label,
-        symptom: c.symptom?.label, urgency: urgency?.label });
-      if (myRun === run.current) { setTransfer(res); setTransferUrgency(urgency); }
+        symptom: symptom?.label, urgency: c.urgency?.label });
+      if (myRun === run.current) { setTransfer(res); setTransferSymptom(symptom); }
     } catch { /* the dispatch view keeps working without hospital data */ }
   }, [call]);
 
@@ -492,9 +492,10 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
               : transfer.status === 'unavailable' ? <p className="meta">국립중앙의료원 API 응답이 없습니다. 잠시 뒤 다시 시도합니다.</p> : (
               <>
                 <p className="transfer-rule"><strong>{transfer.rule.category}</strong> · {transfer.rule.text}</p>
-                {transferUrgency ? <p className={`transfer-basis ${transferUrgency.committed ? 'is-commit' : 'is-wait'}`}>
-                  {transferUrgency.committed ? `긴급도 ${transferUrgency.label} 확정 기준`
-                    : `긴급도 미확정 · 현재 추정 ${transferUrgency.label} ${Math.round(transferUrgency.p * 100)}% 기준 (확정되면 다시 계산)`}</p> : null}
+                {transferSymptom ? <p className={`transfer-basis ${transferSymptom.committed ? 'is-commit' : 'is-wait'}`}>
+                  {transferSymptom.committed ? `주증상 ${transferSymptom.label} 확정 기준`
+                    : `주증상 미확정 · 현재 추정 ${transferSymptom.label} ${Math.round(transferSymptom.p * 100)}% 기준 (확정·변경 시 다시 계산)`}</p> : null}
+                {transfer.rule.prefer?.length ? <p className="meta">필요 처치: {transfer.rule.prefer.join(', ')}</p> : null}
                 <p className="do-source">근거: {transfer.rule.source}</p>
                 {!transfer.hospitals.length ? <p className="meta">기준에 맞고 응급실 병상이 있는 병원이 주변에 없습니다.</p> : (
                   <ol className="transfer-list">

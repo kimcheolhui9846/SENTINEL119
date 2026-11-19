@@ -35,40 +35,58 @@ _CACHE: dict = {}
 _KB = "119구급대원 현장응급처치 표준지침(2023) · 이송대상기관 선정 및 결정"
 # NMC level names, strongest first.
 LEVELS = ["권역응급의료센터", "전문응급의료센터", "지역응급의료센터", "지역응급의료기관"]
-MKIOSK = {"MKioskTy1": "심근경색 재관류", "MKioskTy2": "뇌경색 재관류", "MKioskTy3": "뇌출혈 수술",
-          "MKioskTy4": "대동맥 응급", "MKioskTy16": "분만", "MKioskTy17": "산과 수술", "MKioskTy19": "중증화상",
-          "MKioskTy20": "사지접합"}
+# NMC serious-disease acceptance (MKioskTy) grouped as in ermct-backend app/procedure_groups.py; a group is
+# available when any of its codes is "Y". Codes 5, 6 and 28 have no group there and are left out.
+PROCEDURES = {
+    "심근경색 재관류(PCI)": ["MKioskTy1"], "뇌경색 재관류": ["MKioskTy2"], "뇌출혈 수술": ["MKioskTy3"],
+    "대동맥 응급": ["MKioskTy4"], "복부 응급수술": ["MKioskTy7", "MKioskTy8", "MKioskTy9"],
+    "장중첩·장폐색": ["MKioskTy10"], "위장관 내시경": ["MKioskTy11", "MKioskTy12"],
+    "기관지 내시경": ["MKioskTy13", "MKioskTy14"], "신생아 집중치료": ["MKioskTy15"],
+    "분만·산과 수술": ["MKioskTy16", "MKioskTy17", "MKioskTy18"], "중증화상": ["MKioskTy19"],
+    "사지접합": ["MKioskTy20", "MKioskTy21"], "응급투석": ["MKioskTy22", "MKioskTy23"],
+    "정신과 폐쇄병동": ["MKioskTy24"], "안과 응급": ["MKioskTy25"], "영상의학 혈관중재": ["MKioskTy26", "MKioskTy27"],
+}
+_RULE_TEXT = {
+    "심폐정지": ("지역응급의료기관", "가장 가까운 지역응급의료기관 이상 의료기관으로 이송", "3. 심폐정지 환자 (p.55)"),
+    "뇌졸중 의심": ("지역응급의료센터", "가까운 지역응급의료센터 이상, 혈전용해(재관류) 가능 기관 우선", "4. 뇌졸중의증 환자 (p.55)"),
+    "중증외상": ("권역응급의료센터", "중증외상 진료가 가능한 가까운 권역외상센터 (외상센터 목록 미연동: 권역응급의료센터로 대체)",
+                "1. 외상 환자 · 중증외상환자 (p.54)"),
+    "경증 외상": ("지역응급의료기관", "가장 가까운 지역응급의료기관", "1. 외상 환자 · 경증 외상환자 (p.54)"),
+    "비외상 중증": ("지역응급의료센터", "가까운 지역응급의료센터 이상 의료기관", "2. 비외상 환자 · 중증응급환자 (p.55)"),
+    "경증 응급": ("지역응급의료기관", "가장 가까운 지역응급의료기관", "2. 비외상 환자 · 경증응급환자 (p.55)"),
+}
+# Main symptom -> (KB category, procedures to prefer). The symptom decides; urgency only splits trauma.
+_BY_SYMPTOM = {
+    "심정지·호흡정지": ("심폐정지", []),
+    "마비": ("뇌졸중 의심", ["뇌경색 재관류", "뇌출혈 수술"]),
+    "의식저하·실신": ("비외상 중증", ["뇌경색 재관류", "뇌출혈 수술", "심근경색 재관류(PCI)"]),
+    "경련·발작": ("비외상 중증", ["뇌출혈 수술"]),
+    "흉통·가슴불편감·심계항진": ("비외상 중증", ["심근경색 재관류(PCI)", "대동맥 응급"]),
+    "호흡곤란·기도이물": ("비외상 중증", ["기관지 내시경"]),
+    "출혈(토혈·혈변·객혈·코피 등)": ("비외상 중증", ["위장관 내시경", "영상의학 혈관중재"]),
+    "분만진통·질출혈": ("비외상 중증", ["분만·산과 수술", "신생아 집중치료"]),
+    "복통·구토·설사": ("경증 응급", ["복부 응급수술", "장중첩·장폐색", "위장관 내시경"]),
+    "외상(열상·골절·화상 등)": ("경증 외상", ["사지접합", "중증화상"]),
+}
 
 
 def transfer_rule(subtype=None, symptom=None, urgency=None):
-    """KB rule for the committed EMS decisions: {category, min_level, prefer, text, source}."""
-    if subtype == "심정지" or symptom == "심정지·호흡정지":
-        return {"category": "심폐정지", "min_level": "지역응급의료기관", "prefer": [],
-                "text": "가장 가까운 지역응급의료기관 이상 의료기관으로 이송", "source": f"{_KB} 3. 심폐정지 환자 (p.55)"}
-    if symptom == "마비":
-        return {"category": "뇌졸중 의심", "min_level": "지역응급의료센터", "prefer": ["MKioskTy2", "MKioskTy3"],
-                "text": "가까운 지역응급의료센터 이상, 혈전용해(재관류) 가능 기관 우선",
-                "source": f"{_KB} 4. 뇌졸중의증 환자 (p.55)"}
-    if subtype in ("부상", "사고") and urgency == "상":
-        return {"category": "중증외상", "min_level": "권역응급의료센터", "prefer": [],
-                "text": "중증외상 진료가 가능한 가까운 권역외상센터 (외상센터 목록 미연동: 권역응급의료센터로 대체)",
-                "source": f"{_KB} 1. 외상 환자 · 중증외상환자 (p.54)"}
-    if subtype in ("부상", "사고"):
-        return {"category": "경증 외상", "min_level": "지역응급의료기관", "prefer": [],
-                "text": "가장 가까운 지역응급의료기관", "source": f"{_KB} 1. 외상 환자 · 경증 외상환자 (p.54)"}
-    if symptom == "흉통·가슴불편감·심계항진" and urgency == "상":
-        return {"category": "비외상 중증 (흉통)", "min_level": "지역응급의료센터", "prefer": ["MKioskTy1"],
-                "text": "가까운 지역응급의료센터 이상, 심근경색 재관류 가능 기관 우선",
-                "source": f"{_KB} 2. 비외상 환자 · 중증응급환자 (p.55)"}
-    if subtype == "임산부":
-        return {"category": "임산부", "min_level": "지역응급의료센터" if urgency == "상" else "지역응급의료기관",
-                "prefer": ["MKioskTy16", "MKioskTy17"], "text": "분만·산과 수술 가능 기관 우선",
-                "source": f"{_KB} 2. 비외상 환자 (p.55) · 수용 가능 질환은 NMC 중증질환 정보"}
-    if urgency == "상":
-        return {"category": "비외상 중증", "min_level": "지역응급의료센터", "prefer": [],
-                "text": "가까운 지역응급의료센터 이상 의료기관", "source": f"{_KB} 2. 비외상 환자 · 중증응급환자 (p.55)"}
-    return {"category": "경증 응급", "min_level": "지역응급의료기관", "prefer": [],
-            "text": "가장 가까운 지역응급의료기관", "source": f"{_KB} 2. 비외상 환자 · 경증응급환자 (p.55)"}
+    """KB transfer rule chosen by the main symptom (falls back to the subtype when no symptom is known)."""
+    if subtype == "심정지":
+        category, prefer = "심폐정지", []
+    elif symptom in _BY_SYMPTOM:
+        category, prefer = _BY_SYMPTOM[symptom]
+    elif subtype == "임산부":
+        category, prefer = "비외상 중증", ["분만·산과 수술", "신생아 집중치료"]
+    elif subtype in ("부상", "사고"):
+        category, prefer = "경증 외상", ["사지접합", "중증화상"]
+    else:
+        category, prefer = "경증 응급", []
+    if category == "경증 외상" and urgency == "상":
+        category = "중증외상"
+    min_level, text, section = _RULE_TEXT[category]
+    return {"category": category, "symptom": symptom, "min_level": min_level, "prefer": prefer, "text": text,
+            "source": f"{_KB} {section}" + (" · 우선 처치는 NMC 중증질환 수용 정보" if prefer else "")}
 
 
 def _key():
@@ -140,7 +158,8 @@ async def _live_district(client, district):
         if not hpid or level not in LEVELS or not h.get("wgs84Lat"):
             continue
         bed = beds_by.get(hpid, {})
-        accepts = [name for code, name in MKIOSK.items() if (serious_by.get(hpid, {}).get(code) or "").startswith("Y")]
+        row = serious_by.get(hpid, {})
+        accepts = [name for name, codes in PROCEDURES.items() if any((row.get(c) or "").startswith("Y") for c in codes)]
         out.append({"hpid": hpid, "name": h.get("dutyName", hpid), "address": h.get("dutyAddr", ""), "level": level,
                     "district": district, "lat": float(h["wgs84Lat"]), "lon": float(h["wgs84Lon"]),
                     "er_beds": _int(bed.get("hvec")),
@@ -177,11 +196,15 @@ async def candidates(point, rule, limit=4):
         return "unconfigured", []
     try:
         async with httpx.AsyncClient(timeout=8.0, trust_env=False) as client:
-            groups = await asyncio.gather(*(_district(client, d) for d in _neighbors(point)))
             floor = LEVELS.index(rule["min_level"])
             # Rule level first; a live count of 0 ER beds excludes, an unknown count (directory data) does not.
-            eligible = [dict(h) for g in groups for h in g if LEVELS.index(h["level"]) <= floor and h["er_beds"] != 0]
-            eligible.sort(key=lambda h: (-sum(1 for p in rule["prefer"] if MKIOSK[p] in h["accepts"]),
+            # Widen from the 3 nearest districts to 8 when no hospital nearby meets the level (e.g. 권역 centres).
+            for count in (3, 8):
+                groups = await asyncio.gather(*(_district(client, d) for d in _neighbors(point, count)))
+                eligible = [dict(h) for g in groups for h in g if LEVELS.index(h["level"]) <= floor and h["er_beds"] != 0]
+                if eligible:
+                    break
+            eligible.sort(key=lambda h: (-sum(1 for p in rule["prefer"] if p in h["accepts"]),
                                          math.hypot((h["lat"] - point["lat"]) * 111, (h["lon"] - point["lon"]) * 88)))
             picked = eligible[:limit]
             routes, messages = await asyncio.gather(asyncio.gather(*(route(point, h) for h in picked)),
@@ -201,8 +224,15 @@ def _criterion(h, rule):
         parts.append("가용 병상 " + ", ".join(f"{k} {v}" for k, v in h["beds"].items()))
     elif h["er_beds"] is None:
         parts.append("실시간 병상 정보 없음")
-    if h["accepts"]:
-        parts.append("수용 가능 수술·처치: " + ", ".join(h["accepts"]))
+    needed = [p for p in rule["prefer"] if p in h["accepts"]]
+    missing = [p for p in rule["prefer"] if p not in h["accepts"]]
+    if needed:
+        parts.append("이 환자에게 필요한 처치 가능: " + ", ".join(needed))
+    if missing and h["data"] == "live":
+        parts.append("필요 처치 불가·미제공: " + ", ".join(missing))
+    others = [a for a in h["accepts"] if a not in rule["prefer"]]
+    if others:
+        parts.append("그 밖의 수용 가능 수술·처치: " + ", ".join(others))
     if h["equipment"]:
         parts.append("가용 장비: " + ", ".join(h["equipment"]))
     if h["messages"]:
@@ -215,8 +245,10 @@ async def zoro_choice(turns, rule, hospitals):
     url = os.getenv("SENTINEL_ZORO_URL", "").strip().rstrip("/")
     if not url or not hospitals:
         return None
-    question = {"instructions": (f"구급 환자를 이송할 병원을 고르세요. 환자 분류: {rule['category']}. "
-                                 f"이송 원칙: {rule['text']}. 도착 시간이 짧고 응급실 병상이 있는 병원을 우선합니다."),
+    need = f" 필요한 처치: {', '.join(rule['prefer'])}." if rule["prefer"] else ""
+    question = {"instructions": (f"구급 환자를 이송할 병원을 고르세요. 주증상: {rule.get('symptom') or '미상'}. "
+                                 f"환자 분류: {rule['category']}. 이송 원칙: {rule['text']}.{need} "
+                                 "필요한 처치가 가능하고, 도착 시간이 짧고, 응급실 병상이 있고, 수용 제한 메시지가 없는 병원을 우선합니다."),
                 "criteria": {h["hpid"]: _criterion(h, rule) for h in hospitals}}
     try:
         async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:

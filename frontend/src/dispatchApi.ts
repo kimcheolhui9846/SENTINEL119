@@ -17,7 +17,7 @@ export interface TransferHospital extends Point {
 }
 export interface TransferResponse {
   status: 'ok' | 'unconfigured' | 'unavailable'; data?: 'live' | 'directory';
-  rule: { category: string; min_level: string; text: string; source: string };
+  rule: { category: string; min_level: string; text: string; source: string; prefer?: string[]; symptom?: string | null };
   hospitals: TransferHospital[];
   zoro: { probabilities: Record<string, number>; choice: string; latency_ms?: number } | null;
   source: string;
