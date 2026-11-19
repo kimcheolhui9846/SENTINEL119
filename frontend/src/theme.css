@@ -1,0 +1,110 @@
+/* Light theme after the NEMC "내 손안의 응급실" board: grey-blue canvas, white cards, coral app bar,
+   status green / amber / red. Loaded last so these tokens and overrides win over the console defaults. */
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css");
+
+:root {
+  color-scheme: light;
+  --bg: #f0f3f7;
+  --bg-deep: #e6eaf0;
+  --panel: #ffffff;
+  --panel-2: #f7f9fb;
+  --panel-3: #eef2f6;
+  --field: #eef1f5;
+  --line: #dde1e9;
+  --line-soft: #e9edf2;
+  --line-strong: #aab0bc;
+  --text: #2a2e39;
+  --text-dim: #495464;
+  --text-faint: #89929f;
+  --action: #458ed3;
+  --action-strong: #346a9e;
+  --action-ink: #ffffff;
+  --action-bg: rgba(69, 142, 211, 0.1);
+  --mint: #2f9e6f;
+  --mint-ink: #ffffff;
+  --mint-bg: rgba(84, 178, 137, 0.12);
+  --amber: #c27c0e;
+  --amber-bg: rgba(223, 149, 30, 0.12);
+  --error: #e5484d;
+  --error-strong: #d93036;
+  --error-bg: rgba(239, 68, 68, 0.09);
+  --muted-bg: rgba(73, 84, 100, 0.06);
+  --coral: #fa7157;
+  --ok: #54b289;
+  --busy: #df951e;
+  --full: #ef4444;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --font: "Pretendard Variable", "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif;
+  --num: "Pretendard Variable", "Pretendard", system-ui, sans-serif;
+}
+
+body, .app-shell { background: var(--bg); color: var(--text); font-family: var(--font); }
+
+/* Coral app bar */
+.masthead { background: var(--coral); border-bottom: 0; box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04); }
+.masthead .brand-name { color: #fff; font-weight: 800; letter-spacing: 0.02em; }
+.masthead .brand-mark { background: #fff; color: var(--coral); }
+.masthead .nav-tab { color: rgba(255, 255, 255, 0.85); background: transparent; border-color: transparent; font-weight: 600; }
+.masthead .nav-tab:hover { color: #fff; background: rgba(255, 255, 255, 0.14); }
+.masthead .nav-tab.active, .masthead .nav-tab[aria-selected="true"] { color: var(--coral); background: #fff; font-weight: 800; }
+.masthead .mode-indicator { color: #fff; border-color: rgba(255, 255, 255, 0.6); background: rgba(255, 255, 255, 0.12); }
+
+/* Cards */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 1px 2px rgba(42, 46, 57, 0.05); }
+.panel-header { border-bottom: 1px solid var(--line-soft); }
+.section-title { color: var(--text); font-weight: 800; }
+.button.primary { background: var(--action); border-color: var(--action); color: #fff; }
+.button.primary:hover:not(:disabled) { background: var(--action-strong); border-color: var(--action-strong); }
+.button.secondary { background: #fff; color: var(--text-dim); border-color: var(--line); }
+.dispatch-bar select, .compare select, .compare button { background: #fff; color: var(--text); border-color: var(--line); }
+.alert { background: var(--error-bg); color: var(--error-strong); border-color: var(--error); }
+
+/* Map chrome on a light page */
+.dispatch-map-wrap { border-color: var(--line); box-shadow: 0 1px 2px rgba(42, 46, 57, 0.06); }
+.dispatch-map .leaflet-tile-pane { filter: saturate(0.55) brightness(1.03); }
+.map-banner { background: rgba(255, 255, 255, 0.97); color: var(--text); border-width: 2px; box-shadow: 0 8px 24px rgba(42, 46, 57, 0.18); }
+.map-banner-tag { color: var(--text-faint); }
+.map-banner-detail { color: var(--text-dim); }
+.map-banner-detail .hl-task { color: var(--text-faint); }
+.map-banner-detail .hl-label { color: var(--text); }
+.map-banner[data-state="commit"] { background: #f2fbf6; }
+.map-banner[data-state="wait"] { background: #fffaf0; }
+.map-caption { background: rgba(22, 24, 31, 0.86); }
+.map-follow { background: #fff; color: var(--text-dim); border-color: var(--line); box-shadow: 0 2px 6px rgba(42, 46, 57, 0.12); }
+.map-follow.is-on { color: var(--mint); border-color: var(--mint); }
+.dispatch-legend { background: rgba(255, 255, 255, 0.95); box-shadow: 0 2px 6px rgba(42, 46, 57, 0.1); }
+
+/* Decision panel */
+.prob-block { background: #fff; border-color: var(--line); }
+.prob-track { background: var(--field); }
+.prob-fill { background: #9fc4e8; }
+.prob-row[data-picked="true"] .prob-fill { background: var(--ok); }
+.prob-need { background: var(--busy); }
+
+/* Transcript bubbles */
+.dispatch-transcript li { background: var(--panel-2); }
+.dispatch-transcript li[data-speaker="1"] { --who: #8054e7; background: #f6f2ff; }
+.dispatch-transcript li[data-speaker="0"] { --who: #458ed3; color: var(--text); }
+
+/* Orders and hospitals */
+.dispatch-orders li { background: var(--panel-2); }
+.transfer-list li { background: #fff; border: 1px solid var(--line); border-left-width: 4px; border-left-color: var(--line-strong); }
+.transfer-list li[data-chosen="true"] { border-color: var(--ok); border-left-color: var(--ok); background: #f4fbf7; }
+.hf-chip { background: #fff; border-color: var(--line); color: var(--text-dim); }
+.hf-msg { background: #fff8eb; }
+.hf-msg.is-block { background: #fff1f1; }
+
+/* NEMC-style bed gauge and level badge */
+.hosp-top { display: flex; align-items: center; gap: 10px; }
+.level-badge { flex: none; padding: 2px 7px; border-radius: 4px; background: var(--full); color: #fff; font-size: 12px; font-weight: 800; }
+.level-badge[data-level="센터"] { background: #e8613f; }
+.level-badge[data-level="기관"] { background: #8c95a3; }
+.bed-ring { display: grid; justify-items: center; gap: 2px; margin-left: auto; font-size: 11px; color: var(--text-faint); }
+.bed-ring svg { width: 40px; height: 40px; }
+.bed-ring .ring-label { font-size: 10px; font-weight: 800; }
+.bed-ring b { font-size: 12px; color: var(--text); }
+.hosp-p { font-size: 13px; font-weight: 800; color: var(--action-strong); min-width: 4.6rem; text-align: right; }
+.transfer-list li[data-chosen="true"] .hosp-p { color: var(--mint); }
+.map-caption p { color: #ffffff; }
+.map-caption-who { filter: brightness(1.35); }

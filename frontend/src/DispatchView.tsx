@@ -6,7 +6,7 @@ import type { CompareScenario, ScenarioDetail } from './compareApi';
 import { advance, DISPATCH_THRESHOLD, emptyZoro, THRESHOLD } from './CompareView';
 import type { Labels, ZoroState } from './CompareView';
 import { dispatchApi } from './dispatchApi';
-import type { Assignment, FleetUnit, Patrol, Point, TransferHospital, TransferReason, TransferResponse } from './dispatchApi';
+import type { Assignment, FleetUnit, Patrol, Point, TransferHospital, TransferResponse } from './dispatchApi';
 import 'leaflet/dist/leaflet.css';
 import './drill.css';
 import './dispatch.css';
@@ -284,6 +284,25 @@ function Countdown({ order, now, transport }: { order: Order; now: number; trans
   return <span className="tabular is-transport">{toGo > 0 ? `병원 이송 중 · ${clock(toGo)}` : '병원 도착'}</span>;
 }
 
+// NEMC-style ER bed gauge: 원활 (5+ beds) / 보통 (1-4) / 혼잡 (0); unknown without live data.
+function BedRing({ beds }: { beds: number | null }) {
+  const state = beds === null ? null : beds >= 5 ? ['원활', 'var(--ok)'] : beds > 0 ? ['보통', 'var(--busy)'] : ['혼잡', 'var(--full)'];
+  const fill = beds === null ? 0 : Math.min(1, beds / 10);
+  const c = 2 * Math.PI * 15;
+  return (
+    <span className="bed-ring" title="응급실 가용 병상">
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <circle cx="20" cy="20" r="15" fill="#fff" stroke="#e4e8ee" strokeWidth="5" />
+        {state ? <circle cx="20" cy="20" r="15" fill="none" stroke={state[1]} strokeWidth="5" strokeLinecap="round"
+          strokeDasharray={`${c * Math.max(0.08, fill)} ${c}`} transform="rotate(-90 20 20)" /> : null}
+        <text x="20" y="23.5" textAnchor="middle" className="ring-label" fill={state ? state[1] : '#89929f'}>{state ? state[0] : '정보'}</text>
+      </svg>
+      <span>응급실 <b>{beds ?? '-'}</b></span>
+    </span>
+  );
+}
+const LEVEL_SHORT: Record<string, string> = { 권역응급의료센터: '권역', 전문응급의료센터: '전문', 지역응급의료센터: '센터', 지역응급의료기관: '기관' };
+
 // Hospital option facts, split into readable rows (the same data Zoro read as one option sentence).
 function HospitalFacts({ h, prefer }: { h: TransferHospital; prefer: string[] }) {
   const needed = prefer.filter((x) => h.accepts.includes(x));
@@ -398,10 +417,8 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   // Main symptom the transfer rule used: committed, or the current top estimate while it is still WAIT.
   const [transferSymptom, setTransferSymptom] = useState<{ label: string; p: number; committed: boolean } | null>(null);
   const transferKey = useRef('');
-  const [reason, setReason] = useState<TransferReason | null>(null);
   const [transport, setTransport] = useState<Transport | null>(null);
   const [follow, setFollow] = useState(true);
-  const [reasoning, setReasoning] = useState(false);
   const lastTransfer = useRef<Parameters<typeof dispatchApi.transfer>[0] | null>(null);
   const positions = useRef<Record<string, Point>>({});
   const run = useRef(0);
@@ -419,7 +436,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
 
   const reset = useCallback(() => {
     run.current += 1; sentKey.current = ''; transferKey.current = ''; setTransfer(null); setTransferSymptom(null);
-    setReason(null); setReasoning(false); lastTransfer.current = null; setTransport(null);
+    lastTransfer.current = null; setTransport(null);
     asked.current = new Set();
     setPlaying(false); setBusy(false); setLines([]); setSft(emptyZoro()); setBase(emptyZoro()); setOrders([]);
     setError(null); setShowGold(false);
@@ -549,21 +566,8 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   }, [now, transport, carrier, chosenHospital]);
   const focusId = transport?.unitId ?? carrier?.unit?.id ?? orders.find((o) => o.unit)?.unit?.id ?? null;
 
-  // After the call: why Zoro chose that hospital (its own reasoning + leave-one-group-out influence).
-  const explainChoice = useCallback(async (withReasoning = false) => {
-    if (!lastTransfer.current || reasoning) return;
-    const myRun = run.current;
-    setReasoning(true);
-    try {
-      const turns = lines.map(({ speaker, text }) => ({ speaker, text }));
-      const res = await dispatchApi.transfer({ ...lastTransfer.current, turns, explain: true, reason: withReasoning });
-      if (myRun === run.current) { setTransfer(res); setReason(res.reason ?? null); }
-    } catch { /* keep the current recommendation */ } finally {
-      if (myRun === run.current) setReasoning(false);
-    }
-  }, [lines, reasoning]);
-  useEffect(() => { if (done && transfer?.status === 'ok' && !reason && !reasoning) void explainChoice(); },
-    [done, transfer, reason, reasoning, explainChoice]);
+
+
   useEffect(() => {
     if (!playing || busy) return;
     if (done) { setPlaying(false); setShowGold(true); return; }
@@ -744,7 +748,12 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
                       const chosen = transfer.zoro?.choice === h.hpid;
                       return (
                         <li key={h.hpid} data-chosen={chosen}>
-                          <div className="do-head"><strong>{chosen ? '✓ ' : ''}{h.name}</strong><span className="tabular">{Math.round(p * 100)}%</span></div>
+                          <div className="hosp-top">
+                            <span className="level-badge" data-level={LEVEL_SHORT[h.level] ?? h.level}>{LEVEL_SHORT[h.level] ?? h.level}</span>
+                            <strong>{chosen ? '✓ ' : ''}{h.name}</strong>
+                            <BedRing beds={h.er_beds} />
+                            <span className="tabular hosp-p">Zoro {Math.round(p * 100)}%</span>
+                          </div>
                           <span className="prob-track"><span className="prob-fill" style={{ width: `${Math.round(p * 100)}%` }} /></span>
                           <HospitalFacts h={h} prefer={transfer.rule.prefer ?? []} />
                         </li>
@@ -753,40 +762,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
                   </ol>
                 )}
                 <p className="do-source">{transfer.source} · 위 병원별 정보가 Zoro 선택지 문구로 들어가며, 병원 선택은 공개 Zoro 결정 헤드(학습하지 않은 과제)입니다.</p>
-                {reason ? (
-                  <div className="reason-box">
-                    <h3>선택 이유</h3>
-                    {reason.summary.map((line, i) => <p key={i} className={i === 0 ? 'reason-lead' : 'reason-line'}>{line}</p>)}
-                    <details className="reason-more">
-                      <summary>정보별 영향 자세히</summary>
-                      <ul className="reason-effects">
-                        {reason.effects.map((e) => (
-                          <li key={e.group} data-sign={e.delta > 0.02 ? 'plus' : e.delta < -0.02 ? 'minus' : 'zero'}>
-                            <span>{e.group}</span>
-                            <b className="tabular">{e.delta > 0 ? '+' : ''}{Math.round(e.delta * 100)}%p</b>
-                          </li>
-                        ))}
-                      </ul>
-                      <p className="do-source">{reason.method}. +는 그 정보가 선택을 뒷받침, −는 그 정보가 오히려 선택 확률을 낮춘 경우입니다.</p>
-                    </details>
-                    {reason.reasoned ? (
-                      <details className="reason-more" open>
-                        <summary>Zoro 추론 원문 (실험 · 영어로 생각 · {(reason.reasoned.ms / 1000).toFixed(1)}초{reason.reasoned.finished ? '' : ' · 중간까지'})</summary>
-                        <p className="reason-head">추론 후 판단: <b>{reason.reasoned.choice_name}</b>{' '}
-                          <b className="hl-prob">{Math.round((reason.reasoned.reasoned[reason.reasoned.choice] ?? 0) * 100)}%</b>
-                          {reason.reasoned.choice !== transfer.zoro?.choice
-                            ? <span className="reason-flip"> · 직접 판단과 다름 (이송 경로는 직접 판단 기준)</span> : null}</p>
-                        <p className="reason-text">{reason.reasoned.text}</p>
-                      </details>
-                    ) : (
-                      <button type="button" className="button secondary reason-try" disabled={reasoning} onClick={() => void explainChoice(true)}>
-                        {reasoning ? 'Zoro가 추론을 쓰는 중… (5~15초)' : 'Zoro 추론 원문 보기 (실험, 수 초)'}</button>
-                    )}
-                  </div>
-                ) : done || live ? (
-                  <button type="button" className="button secondary" disabled={reasoning || !lastTransfer.current} onClick={() => void explainChoice()}>
-                    {reasoning ? '선택 이유 계산 중…' : '선택 이유 보기'}</button>
-                ) : null}
+
               </>
             )}
           </section>
