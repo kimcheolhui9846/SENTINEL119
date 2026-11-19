@@ -32,9 +32,60 @@ SENTINEL119는 이 정보들을 신고 접수 단계부터 연결하는 데 집�
 - **지침 근거:** 소방청 「119구급대원 현장응급처치 표준지침(2023년 개정본)」의 필요한 항목을 원문과 대조해 활용.
 - **병원 정보:** [국립중앙의료원 응급의료기관 정보 조회 API](https://www.data.go.kr/data/15000563/openapi.do) 연동을 통해 병원 후보의 수용 정보를 비교.
 
+## 로컬 관제 화면 실행
+
+서울 합성 신고 3종을 재생하는 FastAPI·React 데모입니다. 기본 모드는 시뮬레이션입니다. 다음 명령을 저장소 루트에서 PowerShell로 실행한 뒤 브라우저에서 [로컬 관제 화면](http://127.0.0.1:8000/)을 엽니다. 검증 환경은 Python 3.13과 Node.js 26입니다.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+npm.cmd ci --prefix frontend
+npm.cmd run build --prefix frontend
+.\.venv\Scripts\python.exe -m uvicorn backend.api:app --host 127.0.0.1 --port 8000
+```
+
+**다음 발화**로 신고를 진행합니다. 성수역 시나리오의 2턴에서 차량 확정과 병원 보류가 함께 나타납니다. 강변 시나리오는 ETA 역전, 병원 정보 지연 시나리오는 조회 실패와 재시도를 보여줍니다. 직접 입력은 검토된 근거가 생길 때까지 보류됩니다. 초기화하면 새 신고가 시작됩니다.
+
+실시간 모드는 백엔드 실행 전에 `ZORO_BASE_URL`을 지정합니다. 서버가 여러 모델을 제공하면 `ZORO_MODEL_ID`도 지정합니다. 역할별 서버는 `ZORO_INTAKE_BASE_URL`, `ZORO_VEHICLE_BASE_URL`, `ZORO_HOSPITAL_BASE_URL`과 각각의 `_MODEL_ID`로 설정합니다. 서버가 응답해야 [모델 어댑터](backend/inference.py)가 모델 ID를 확인하고 typed decision을 요청합니다. 차량·병원 자료는 두 모드 모두 가상입니다.
+
+모의 출동 클라이언트는 화면에 표시한 세션의 `expected_version`, 차량의 `expected_vehicle_id`, `decisions.vehicle.recommendation_revision`에서 읽은 `expected_vehicle_revision`을 `dispatch` 이벤트에 함께 보냅니다. 추천이 바뀌어 HTTP 409를 받으면 최신 세션을 표시하고 운영자의 새 클릭을 기다립니다. 모델 응답에 `model`이 있으면 요청한 ID와 일치해야 합니다. 이 필드를 생략하는 기존 서버에서는 요청에 선택한 ID만 확인할 수 있습니다.
+
+백엔드 단위·HTTP 테스트는 `.\.venv\Scripts\python.exe -B -m unittest discover -v`로 실행합니다. 프론트 개발 서버는 `npm.cmd run dev --prefix frontend`로 시작하며 `/api`를 로컬 FastAPI에 전달합니다. 서버가 켜진 상태에서 Playwright MCP로 [데스크톱 관제 흐름](frontend/tests/console.browser.js)과 [차량 재확인·병원 정보 복구](frontend/tests/review.browser.js)를 검증할 수 있습니다.
+
+차량 만료와 병원 조회 연속 실패를 재현하려면 프론트 빌드 후 `.\.venv\Scripts\python.exe -m uvicorn tests.freshness_console:create_test_app --factory --host 127.0.0.1 --port 8024`로 테스트 서버를 실행합니다. [데스크톱 장애 회귀 검사](frontend/tests/freshness.browser.js)는 출동 거절 직후의 버튼 상태와 병원의 마지막 관측 시각을 확인합니다.
+
+## 공용 판단 하네스
+
+Python 표준 라이브러리로 구현한 [판단 검증 모듈](decision_guard.py)은 합성 신고 시뮬레이션에서 Zoro 형식의 선택을 검증합니다. 모델 요청 전에 서버가 검토한 판단 근거, 위치 `(값, 근거 턴)`, 차량·병원 후보의 가용 상태를 `advance`에 전달하고 `begin`으로 요청 티켓을 발급합니다. 응답을 받으면 티켓과 함께 `apply`에 전달하고, 현재 판단은 `active`로 조회합니다. 시뮬레이션의 기본 응답 제한은 5초이며 `apply`에서 검사합니다. 네트워크 무응답은 호출부에서 처리합니다.
+
+ETA나 역량만 달라져도 추천을 다시 검토하려면 `candidate_versions`를 사용합니다. 서버에서 순서를 보장한 차량·병원 피드별로 `CandidateVersionTracker`를 하나씩 만들고, 같은 `Guard`를 사용하는 동안 재사용합니다. 매 갱신에서 가용 상태와 ETA를 비롯해 후보 비교에 쓰는 전체 JSON 객체를 `observe`에 전달합니다.
+
+```python
+from decision_guard import CandidateVersionTracker, Guard
+
+guard = Guard("demo")
+vehicle_versions = CandidateVersionTracker()
+hospital_versions = CandidateVersionTracker()
+
+def refresh(turn_id, supports, location, vehicles, hospitals):
+    guard.advance(
+        turn_id, supports=supports, location=location,
+        vehicles={key: candidate["availability"] for key, candidate in vehicles.items()},
+        hospitals={key: candidate["availability"] for key, candidate in hospitals.items()},
+        candidate_versions={
+            "vehicle": vehicle_versions.observe(vehicles),
+            "hospital": hospital_versions.observe(hospitals),
+        },
+    )
+```
+
+데이터 공급자가 후보 버전을 제공하면 그 값도 사용할 수 있습니다. 한 번호는 같은 후보 데이터에만 사용합니다. 버전을 제공하기 시작한 뒤 번호를 생략하거나 낮추면 해당 추천을 보류합니다. 같은 번호에 후보 ID나 가용 상태가 달라지면 더 높은 버전이 들어올 때까지 해당 추천을 보류합니다.
+
+실제 팀 체크포인트의 판단 품질과 이송 지연 감소 효과는 별도 검증이 필요합니다.
+
 ## 현재 상태와 개발 범위
 
-현재 **119 데이터 준비와 Zoro-1 지도학습 코드**를 구현했습니다. head-only 지도 적응, LoRA+decision head 학습, 독립 평가와 관련 단위검사를 제공합니다. 관제 UI·외부 API 연결, 조기 판단과 실제 이송 지연 감소 효과는 아직 검증하지 않았습니다. 설치·실행 방법과 검증 절차는 [학습 안내](docs/training.md)를 참고하세요.
+현재 **119 데이터 준비와 Zoro-1 지도학습 코드**를 구현했습니다. head-only 지도 적응, LoRA+decision head 학습, 독립 평가와 관련 단위검사를 제공합니다. 관제 UI는 위 로컬 관제 화면으로 제공합니다. 외부 API 연결, 조기 판단과 실제 이송 지연 감소 효과는 아직 검증하지 않았습니다. 설치·실행 방법과 검증 절차는 [학습 안내](docs/training.md)를 참고하세요.
 
 첫 구현은 서울의 구급 시나리오와 가상 차량 환경을 대상으로 하는 텍스트 턴 재생 데모입니다. 4종 출동유형 분류를 유지하면서 구급 자원·병원 후보 추천에 집중하고, 이후 음성 입력으로 확장할 계획입니다. 데모는 관제 의사결정을 지원하는 시뮬레이션이며 실제 출동·병원 수용 확정을 수행하지 않습니다.
 
