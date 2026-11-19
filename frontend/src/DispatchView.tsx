@@ -6,7 +6,7 @@ import type { CompareScenario, ScenarioDetail } from './compareApi';
 import { advance, DISPATCH_THRESHOLD, emptyZoro, THRESHOLD } from './CompareView';
 import type { Labels, ZoroState } from './CompareView';
 import { dispatchApi } from './dispatchApi';
-import type { Assignment, FleetUnit, Patrol, Point, TransferReason, TransferResponse } from './dispatchApi';
+import type { Assignment, FleetUnit, Patrol, Point, TransferHospital, TransferReason, TransferResponse } from './dispatchApi';
 import 'leaflet/dist/leaflet.css';
 import './drill.css';
 import './dispatch.css';
@@ -42,7 +42,7 @@ function moving(id: string, path: Point[], durationS: number, start: number): Mo
 }
 function positionAt(m: Moving, now: number, loop = false) {
   const raw = (now - m.start) / m.ms;
-  const t = loop ? raw - Math.floor(raw) : Math.min(1, raw);
+  const t = loop ? raw - Math.floor(raw) : Math.min(1, Math.max(0, raw));  // a leg that starts later waits at its origin
   const d = m.total * t;
   const i = Math.max(1, m.cumulative.findIndex((c) => c >= d));
   const [a, b] = [m.path[i - 1], m.path[i] ?? m.path[i - 1]];
@@ -52,6 +52,10 @@ function positionAt(m: Moving, now: number, loop = false) {
 }
 
 interface Line { speaker: 0 | 1; text: string; note?: string; base?: string; ms?: number }
+// The ambulance that carries the patient: it reaches the scene, treats briefly, then drives to the hospital.
+interface Transport { unitId: string; hospital: TransferHospital; startedAt: number }
+const SCENE_TREAT_MS = 2500;
+const animMs = (durationS: number) => Math.max(5000, (durationS * 1000) / TIME_SCALE);
 interface Order extends Assignment { turn: number; dispatchedAt: number }
 
 const HOSPITAL_ICON = '<path d="M4 21V5h16v16M2 21h20m-10-13v6m-3-3h6m-5 10v-4h4v4"/>';
@@ -63,13 +67,20 @@ function hospitalIcon(chosen: boolean) {
   });
 }
 
-function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfer, onPick }: {
+function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfer, onPick, transport, focusId, follow,
+  onFollow }: {
   fleet: FleetUnit[]; area: ScenarioDetail['area'] | null; orders: Order[]; patrols: Patrol[];
   positions: React.MutableRefObject<Record<string, Point>>; overlay?: React.ReactNode; transfer: TransferResponse | null;
-  onPick?: (p: Point) => void;
+  onPick?: (p: Point) => void; transport: Transport | null; focusId: string | null; follow: boolean;
+  onFollow: (on: boolean) => void;
 }) {
   const pick = useRef(onPick);
   pick.current = onPick;
+  // Follow the carrying ambulance: a ref so the animation loop reads the latest choice without re-creating the map.
+  const camera = useRef({ focusId, follow, last: 0 });
+  const onFollowRef = useRef(onFollow);
+  onFollowRef.current = onFollow;
+  camera.current = { ...camera.current, focusId, follow };
   const element = useRef<HTMLDivElement>(null);
   const state = useRef<{ map: L.Map; markers: Map<string, L.Marker>; incident?: L.LayerGroup; routes: L.LayerGroup;
     moving: Map<string, Moving>; patrol: Map<string, Moving> } | null>(null);
@@ -91,12 +102,19 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfe
     }).catch(() => {});
     const routes = L.layerGroup().addTo(map);
     map.on('click', (event: L.LeafletMouseEvent) => pick.current?.({ lat: event.latlng.lat, lon: event.latlng.lng }));
+    map.on('dragstart', () => camera.current.follow && onFollowRef.current(false));
     state.current = { map, markers: new Map(), routes, moving: new Map(), patrol: new Map() };
     let frame = 0;
     const render = (now: number) => {
       const s = state.current;
       if (s) {
         for (const m of s.moving.values()) s.markers.get(m.id)?.setLatLng(positionAt(m, now).at);
+        const cam = camera.current;
+        const focus = cam.focusId ? s.markers.get(cam.focusId) : undefined;
+        if (cam.follow && focus && s.moving.has(cam.focusId!) && now - cam.last > 450) {
+          cam.last = now;
+          s.map.panTo(focus.getLatLng(), { animate: true, duration: 0.45, noMoveStart: true });
+        }
         for (const m of s.patrol.values()) {
           if (s.moving.has(m.id)) continue;
           const at = positionAt(m, now, true).at;
@@ -191,6 +209,7 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfe
     const bounds = L.latLngBounds([latLng(area.center)]);
     for (const order of orders) {
       if (!order.unit || !order.route) continue;
+      if (transport?.unitId === order.unit.id) continue;  // its scene route is done; the transport line replaces it
       const path = order.route.path.map(latLng);
       L.polyline(path, { color: '#ffffff', weight: 8, opacity: 0.8, interactive: false }).addTo(s.routes);
       L.polyline(path, { color: ROUTE_COLOR[order.kind], weight: 4.5, opacity: 0.95, interactive: false }).addTo(s.routes);
@@ -215,14 +234,34 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfe
         }
       }
     }
-    if (orders.length) s.map.flyToBounds(bounds, { padding: [50, 50], maxZoom: 15.5, duration: 1.0 });
-  }, [orders, area, fleet, positions]);
+    if (orders.length && !camera.current.follow) s.map.flyToBounds(bounds, { padding: [50, 50], maxZoom: 15.5, duration: 1.0 });
+    else if (orders.length) s.map.setZoom(Math.max(s.map.getZoom(), 15));
+  }, [orders, area, fleet, positions, transport]);
+
+  // Transport: the carrying ambulance leaves the scene along the road route to the chosen hospital.
+  const transportLayer = useRef<L.LayerGroup | null>(null);
+  useEffect(() => {
+    const s = state.current;
+    if (!s) return;
+    transportLayer.current?.remove();
+    transportLayer.current = null;
+    if (!transport) return;
+    const path = transport.hospital.route.path.map(latLng);
+    const group = L.layerGroup().addTo(s.map);
+    L.polyline(path, { color: '#ffffff', weight: 9, opacity: 0.85, interactive: false }).addTo(group);
+    L.polyline(path, { color: '#185c91', weight: 5, opacity: 1, interactive: false }).addTo(group);
+    transportLayer.current = group;
+    s.moving.set(transport.unitId, moving(transport.unitId, transport.hospital.route.path,
+      transport.hospital.route.duration_s, transport.startedAt));
+  }, [transport]);
 
   return (
     <div className="dispatch-map-wrap">
       <div ref={element} className="drill-map dispatch-map" role="region" aria-label="출동 관제 지도" />
       {tileError ? <p className="dispatch-map-alert">지도 배경을 불러오지 못해 경계와 위치만 표시합니다.</p> : null}
       {overlay}
+      <button type="button" className={`map-follow${follow ? ' is-on' : ''}`} aria-pressed={follow}
+        onClick={() => onFollow(!follow)}>{follow ? '● 구급차 따라가는 중' : '○ 구급차 따라가기'}</button>
       <ul className="dispatch-legend" aria-label="범례">
         {(['ambulance', 'pump', 'rescue'] as const).map((k) => <li key={k} data-kind={k}>{UNIT_LABEL[k]}</li>)}
         <li data-kind="caller">신고 위치 (동 안의 시연용 임의 지점)</li>
@@ -233,11 +272,51 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfe
   );
 }
 
-function Countdown({ order, now }: { order: Order; now: number }) {
+const clock = (s: number) => `${Math.floor(s / 60)}분 ${Math.round(s % 60)}초`;
+function Countdown({ order, now, transport }: { order: Order; now: number; transport: Transport | null }) {
   if (!order.route) return null;
-  const ms = Math.max(5000, (order.route.duration_s * 1000) / TIME_SCALE);
-  const left = Math.max(0, 1 - (now - order.dispatchedAt) / ms) * order.route.duration_s;
-  return <span className="tabular">{left > 0 ? `도착까지 ${Math.floor(left / 60)}분 ${Math.round(left % 60)}초` : '현장 도착'}</span>;
+  const left = Math.max(0, 1 - (now - order.dispatchedAt) / animMs(order.route.duration_s)) * order.route.duration_s;
+  if (left > 0) return <span className="tabular">현장까지 {clock(left)}</span>;
+  if (!transport || transport.unitId !== order.unit?.id) return <span className="tabular">현장 도착</span>;
+  if (now < transport.startedAt) return <span className="tabular is-treat">현장 처치 중</span>;
+  const route = transport.hospital.route;
+  const toGo = Math.max(0, 1 - (now - transport.startedAt) / animMs(route.duration_s)) * route.duration_s;
+  return <span className="tabular is-transport">{toGo > 0 ? `병원 이송 중 · ${clock(toGo)}` : '병원 도착'}</span>;
+}
+
+// Hospital option facts, split into readable rows (the same data Zoro read as one option sentence).
+function HospitalFacts({ h, prefer }: { h: TransferHospital; prefer: string[] }) {
+  const needed = prefer.filter((x) => h.accepts.includes(x));
+  const missing = h.data === 'live' ? prefer.filter((x) => !h.accepts.includes(x)) : [];
+  const others = h.accepts.filter((x) => !prefer.includes(x));
+  return (
+    <div className="hfacts">
+      <div className="hf-row"><span className="hf-k">등급·도착</span>
+        <span>{h.level} · <b>약 {Math.round(h.route.duration_s / 60)}분</b> ({(h.route.distance_m / 1000).toFixed(1)}km)</span></div>
+      <div className="hf-row"><span className="hf-k">가용 병상</span>
+        <span className="hf-chips">{Object.keys(h.beds).length ? Object.entries(h.beds).map(([k, v]) => (
+          <span key={k} className={`hf-chip ${v === 0 ? 'is-zero' : ''}`}>{k} <b>{v}</b></span>))
+          : <span className="meta">실시간 정보 없음</span>}</span></div>
+      {needed.length || missing.length ? (
+        <div className="hf-row"><span className="hf-k">필요 처치</span>
+          <span className="hf-chips">
+            {needed.map((x) => <span key={x} className="hf-chip is-ok">✓ {x}</span>)}
+            {missing.map((x) => <span key={x} className="hf-chip is-no">✗ {x}</span>)}
+          </span></div>
+      ) : null}
+      {others.length ? (
+        <div className="hf-row"><span className="hf-k">그 밖의 처치</span>
+          <span className="hf-chips">{others.map((x) => <span key={x} className="hf-chip is-minor">{x}</span>)}</span></div>
+      ) : null}
+      {h.equipment.length ? (
+        <div className="hf-row"><span className="hf-k">장비</span>
+          <span className="hf-chips">{h.equipment.map((x) => <span key={x} className="hf-chip is-minor">{x}</span>)}</span></div>
+      ) : null}
+      {h.messages.map((m, i) => (
+        <p key={i} className={`hf-msg ${/불가|제외|부족|제한|중단/.test(m) ? 'is-block' : ''}`}>⚠ {m}</p>
+      ))}
+    </div>
+  );
 }
 
 // Free-input mode: a scripted virtual dispatcher that follows the order of real 119 calls (AI Hub
@@ -320,6 +399,8 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   const [transferSymptom, setTransferSymptom] = useState<{ label: string; p: number; committed: boolean } | null>(null);
   const transferKey = useRef('');
   const [reason, setReason] = useState<TransferReason | null>(null);
+  const [transport, setTransport] = useState<Transport | null>(null);
+  const [follow, setFollow] = useState(true);
   const [reasoning, setReasoning] = useState(false);
   const lastTransfer = useRef<Parameters<typeof dispatchApi.transfer>[0] | null>(null);
   const positions = useRef<Record<string, Point>>({});
@@ -338,7 +419,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
 
   const reset = useCallback(() => {
     run.current += 1; sentKey.current = ''; transferKey.current = ''; setTransfer(null); setTransferSymptom(null);
-    setReason(null); setReasoning(false); lastTransfer.current = null;
+    setReason(null); setReasoning(false); lastTransfer.current = null; setTransport(null);
     asked.current = new Set();
     setPlaying(false); setBusy(false); setLines([]); setSft(emptyZoro()); setBase(emptyZoro()); setOrders([]);
     setError(null); setShowGold(false);
@@ -456,6 +537,17 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   }, [live, call, busy, draft, lines, judge]);
 
   const done = !live && !!call && lines.length >= call.turns.length && !busy;
+
+  // The first ambulance carries the patient: once it reaches the scene and a hospital is chosen, it transports.
+  const carrier = orders.find((o) => o.kind === 'ambulance' && o.unit && o.route) ?? null;
+  const chosenHospital = transfer?.status === 'ok' ? transfer.hospitals.find((h) => h.hpid === transfer.zoro?.choice) ?? null : null;
+  useEffect(() => {
+    if (transport || !carrier?.route || !carrier.unit || !chosenHospital) return;
+    const arrival = carrier.dispatchedAt + animMs(carrier.route.duration_s);
+    if (now < arrival) return;
+    setTransport({ unitId: carrier.unit.id, hospital: chosenHospital, startedAt: Math.max(now, arrival) + SCENE_TREAT_MS });
+  }, [now, transport, carrier, chosenHospital]);
+  const focusId = transport?.unitId ?? carrier?.unit?.id ?? orders.find((o) => o.unit)?.unit?.id ?? null;
 
   // After the call: why Zoro chose that hospital (its own reasoning + leave-one-group-out influence).
   const explainChoice = useCallback(async (withReasoning = false) => {
@@ -582,7 +674,8 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
       {error ? <div className="alert" role="alert">{error}</div> : null}
       <div className="dispatch-grid">
         <DispatchMap fleet={fleet} area={lines.length ? call?.area ?? null : null} orders={orders} patrols={patrols}
-          positions={positions} overlay={overlay} transfer={transfer} onPick={live ? (p) => void pickPoint(p) : undefined} />
+          positions={positions} overlay={overlay} transfer={transfer} onPick={live ? (p) => void pickPoint(p) : undefined}
+          transport={transport} focusId={focusId} follow={follow} onFollow={setFollow} />
         <aside className="dispatch-side">
           <section className="panel dispatch-card">
             <header className="panel-header"><h2 className="section-title">SENTINEL_ZORO 판단</h2>
@@ -653,7 +746,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
                         <li key={h.hpid} data-chosen={chosen}>
                           <div className="do-head"><strong>{chosen ? '✓ ' : ''}{h.name}</strong><span className="tabular">{Math.round(p * 100)}%</span></div>
                           <span className="prob-track"><span className="prob-fill" style={{ width: `${Math.round(p * 100)}%` }} /></span>
-                          <p className="meta">{h.context.slice(h.name.length + 3)}</p>
+                          <HospitalFacts h={h} prefer={transfer.rule.prefer ?? []} />
                         </li>
                       );
                     })}
@@ -705,7 +798,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
               <ol className="dispatch-orders">
                 {orders.map((o, i) => (
                   <li key={i} data-kind={o.kind}>
-                    <div className="do-head"><strong>{o.unit ? o.unit.name : `${UNIT_LABEL[o.kind]} 없음`}</strong><Countdown order={o} now={now} /></div>
+                    <div className="do-head"><strong>{o.unit ? o.unit.name : `${UNIT_LABEL[o.kind]} 없음`}</strong><Countdown order={o} now={now} transport={transport} /></div>
                     <p>{o.role} · {o.reason}</p>
                     <p className="meta">{o.turn}턴 지령 · {o.route ? `${(o.route.distance_m / 1000).toFixed(1)}km · ${ROUTE_SOURCE[o.route.source]}` : ''}</p>
                     <p className="do-source">근거: {o.source}</p>

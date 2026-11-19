@@ -161,3 +161,24 @@
 .reason-more summary { cursor: pointer; font-size: 13px; color: var(--action-strong); }
 .reason-more[open] { display: grid; gap: 6px; }
 .reason-try { justify-self: start; font-size: 13px; }
+/* Hospital facts */
+.hfacts { display: grid; gap: 4px; font-size: 13px; }
+.hf-row { display: grid; grid-template-columns: 5.2rem minmax(0, 1fr); gap: 6px; align-items: baseline; }
+.hf-k { color: var(--text-faint); font-size: 12px; }
+.hf-row b { color: var(--text); }
+.hf-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.hf-chip { padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); background: var(--field); font-size: 12px; }
+.hf-chip b { color: var(--text); }
+.hf-chip.is-zero { border-color: var(--error); color: var(--error); }
+.hf-chip.is-zero b { color: var(--error); }
+.hf-chip.is-ok { border-color: var(--mint); color: var(--mint); font-weight: 700; }
+.hf-chip.is-no { border-color: var(--error); color: var(--error); font-weight: 700; }
+.hf-chip.is-minor { color: var(--text-faint); }
+.hf-msg { margin: 0; padding: 4px 8px; border-radius: 6px; background: var(--amber-bg); color: var(--amber); font-size: 12px; }
+.hf-msg.is-block { background: var(--error-bg); color: var(--error); font-weight: 700; }
+/* Transport + camera */
+.do-head .is-treat { color: var(--amber); }
+.do-head .is-transport { color: #7fb6e6; }
+.map-follow { position: absolute; right: 10px; bottom: 22px; z-index: 600; padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--line-strong); background: #101b25e6; color: var(--text-dim); font: inherit; font-size: 13px; cursor: pointer; }
+.map-follow.is-on { border-color: var(--mint); color: var(--mint); font-weight: 700; }
