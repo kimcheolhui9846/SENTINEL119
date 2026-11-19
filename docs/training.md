@@ -298,3 +298,43 @@ done
 | 긴급도 상향 오판 | 198건 | 167건 |
 
 헤드 단독에서 출동유형 macro-F1은 올랐지만 긴급도 macro-F1이 0.0678 하락해 허용 하락폭 0.02를 넘었다. 하향 오판과 상→하 건수도 증가해 이 설정의 8천 건 확대를 보류했다. 별도 `test` 1,000건은 최종 후보 평가용으로 남겨 뒀다.
+
+## 10. 계층형 결정 학습 (출동유형 → 세부유형 → 긴급도 + 주증상)
+
+데모의 목표는 신고가 한 턴씩 들어올 때 출동유형을 먼저 확정하고, 구급·구조는 AI Hub `disasterMedium` 세부유형을, 그리고 긴급도를 확정하는 것이다. 화재·기타 세부유형은 긴급도·출동 판단에 정보가 거의 없어(일반화재 86%, 모두 상 93% 이상) 대분류에서 끝낸다. 구급은 `symptom` 목록에서 위중도 우선순위로 주증상 그룹 하나를 정답으로 만든다. 메타데이터는 정답으로만 쓰고 입력에는 넣지 않는다.
+
+```bash
+# 세부유형 층화 8천 학습 + 기존 dev/confirm/test 통화에 계층 문항 추가
+PYTHONPATH=src python -m sentinel119.hierarchy --data-root "<AI Hub 71768 루트>" \
+  --eval-data data/processed/aihub119-head-comparison --output data/processed/aihub119-hier-8k
+# H1b 설정
+python -m sentinel119.train --data data/processed/aihub119-hier-8k --output runs/zoro-hier-h1b --mode lora \
+  --lora-targets attention --lora-rank 16 --lora-alpha 32 --max-steps 1200 --grad-accum 4 --eval-every 300 \
+  --learning-rate 1e-4 --warmup-ratio 0.05 --schedule cosine --seed 119 --urgency-weight 1.5 \
+  --task-weight ems_subtype=1.0 --task-weight rescue_subtype=1.0 --task-weight ems_symptom=0.3 \
+  --keep-checkpoints --local-files-only
+python -m sentinel119.train --data data/processed/aihub119-hier-8k --checkpoint runs/zoro-hier-h1b \
+  --evaluate-only confirm --output runs/zoro-hier-h1b-confirm --local-files-only
+```
+
+- 학습 8,000통화는 기존 dev·confirm 그룹을 제외한 공식 Training에서 (출동유형, 세부유형, 긴급도)로 층화했다. 희소 세부유형(임산부 237, 약물중독 200, 자살 318, 사고 531, 심정지 581, 기타 753, 대물사고 588)을 하한으로 확보했고, 그 결과 학습 분포는 긴급도 상 39%, 화재 4.4%로 원 분포와 다르다.
+- `--calls-per-batch`로 여러 통화를 한 forward에 묶을 수 있지만, 통화 길이 차이로 padding이 커져 이 데이터에서는 한 통화씩(기본값)이 더 빨랐다.
+- `mean_nll`과 체크포인트 선택은 출동유형·긴급도 문항만 기준으로 한다. 세부유형 정확도는 출동유형까지 맞힌 경우만 정답으로 센 `*_subtype_end_to_end_accuracy`로 기록한다.
+
+### confirm 1,000통화 비교 (2026-11-19)
+
+| 모델 | 학습 | 출동유형 F1 | 긴급도 F1 | 긴급도 하향 | 구급 세부유형(출동까지) | 구조 세부유형(출동까지) | 주증상 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Zoro base | — | 0.599 | 0.308 | 8.7% | 29.0% | 7.0% | 35.9% |
+| v1 | 2천, LoRA q/v r8 | 0.670 | 0.552 | 24.1% | — | — | — |
+| E1 | v1 + 세부유형16·triage 보조 문항 | 0.748 | 0.518 | 29.1% | 16종 단일 문항 | — | — |
+| E2 | 8천, v1 설정 | 0.783 | 0.588 | 19.8% | 미학습 | — | — |
+| **H1b** | 계층 8천 중 4,800통화, 위 명령 (선택 900 step) | **0.784** | 0.565 | 15.3% | **63.2%** | **52.4%** | **45.2%** |
+
+- base의 낮은 하향 오판은 1,000건 중 638건을 상으로 예측하는 편향의 결과다. 상향 오판은 base 561건, H1b 197건이다.
+- 학습 통화를 2천에서 8천으로 늘린 효과(v1→E2)가 가장 컸다. 같은 학습량에서 보조·계층 문항을 추가하면 초기에는 주 과제가 느리게 학습됐다(E1, 그리고 E2 설정에 계층 문항을 더한 실행의 400 step dev). H1b는 LoRA 범위를 넓히고 긴급도 가중치를 높여 출동유형은 E2 수준, 하향 오판은 가장 낮게 유지했다.
+- 한 실행·한 seed의 결과다. confirm은 모델 비교에만 쓰고, 최종 후보를 정한 뒤 test 1,000을 한 번 평가한다.
+
+### 턴 단위 확정 임계값
+
+통화 전체 라벨을 학습한 모델에 턴마다 앞부분 대화를 넣고 태스크별 최상위 확률이 임계값 이상이면 확정한다. 세부유형·긴급도는 출동유형 확정 후에만 확정한다. 임계값은 dev 통화의 모든 턴 앞부분을 채점해 맞는 확정 +1, 틀린 확정 −4, 미확정 0의 합이 최대인 값으로 고른다. E1 기준 dev 63통화에서 출동유형 0.90, 세부유형·긴급도 0.85를 골랐고, 같은 임계값에서 확정 정밀도는 출동유형 95%·세부유형 80%(base 80%·17%)였다. 긴급도는 확률이 0.85를 넘는 경우가 드물어 대부분 확정하지 않았다. 체크포인트를 바꾸면 임계값을 다시 확인한다.
