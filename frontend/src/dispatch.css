@@ -154,3 +154,5 @@
 .reason-effects li[data-sign="plus"] b { color: var(--mint); }
 .reason-effects li[data-sign="minus"] b { color: var(--error); }
 .reason-effects li[data-sign="zero"] b { color: var(--text-faint); }
+.reason-flip { margin: 0; font-size: 13px; font-weight: 700; color: var(--amber); }
+.reason-same { margin: 0; font-size: 13px; font-weight: 700; color: var(--mint); }

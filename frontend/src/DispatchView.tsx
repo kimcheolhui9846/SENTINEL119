@@ -669,6 +669,10 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
                           {reason.reasoned.finished ? '' : ' · 길이 제한으로 중간까지'}) → <b>{reason.reasoned.choice_name}</b>{' '}
                           <b className="hl-prob">{Math.round((reason.reasoned.reasoned[reason.reasoned.choice] ?? 0) * 100)}%</b>
                           <span className="meta"> (추론 전 {Math.round((reason.reasoned.direct[reason.reasoned.choice] ?? 0) * 100)}%)</span></p>
+                        {reason.reasoned.choice !== transfer.zoro?.choice ? (
+                          <p className="reason-flip">추론 후 선택이 바뀌었습니다: 직접 판단 {reason.chosen} → 추론 후 {reason.reasoned.choice_name}.
+                            지도의 이송 경로는 직접 판단 기준이며, 최종 결정은 구급대원·의료지도에 따릅니다.</p>
+                        ) : <p className="reason-same">추론 후에도 같은 병원을 선택했습니다.</p>}
                         <p className="reason-text">{reason.reasoned.text}</p>
                       </>
                     ) : <p className="meta">Zoro 추론을 불러오지 못했습니다.</p>}
