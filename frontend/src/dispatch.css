@@ -139,3 +139,18 @@
   background: var(--field); color: var(--text); font: inherit; font-size: 15px; }
 .live-form textarea:disabled { opacity: 0.6; }
 .dispatch-map.leaflet-container { cursor: grab; }
+/* Why Zoro chose the hospital */
+.reason-box { display: grid; gap: 6px; padding: 10px 12px; border-radius: var(--radius); background: var(--panel-2); border: 1px solid var(--line-strong); }
+.reason-box h3 { margin: 0; font-size: 15px; color: var(--action-strong); }
+.reason-head { margin: 0; font-size: 14px; }
+.reason-head b { color: var(--mint); }
+.reason-head .hl-prob { color: var(--amber); font-size: 16px; }
+.reason-text { margin: 0; font-size: 14px; line-height: 1.55; white-space: pre-wrap; max-height: 220px; overflow-y: auto;
+  padding: 8px 10px; border-radius: var(--radius); background: var(--field); color: var(--text-dim); }
+.reason-facts { margin: 0; font-size: 13px; }
+.reason-facts b { color: var(--mint); }
+.reason-effects { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 4px; }
+.reason-effects li { display: flex; justify-content: space-between; gap: 6px; padding: 3px 8px; border-radius: 6px; font-size: 13px; background: var(--field); }
+.reason-effects li[data-sign="plus"] b { color: var(--mint); }
+.reason-effects li[data-sign="minus"] b { color: var(--error); }
+.reason-effects li[data-sign="zero"] b { color: var(--text-faint); }

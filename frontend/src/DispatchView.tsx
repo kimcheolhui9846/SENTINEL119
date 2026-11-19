@@ -6,7 +6,7 @@ import type { CompareScenario, ScenarioDetail } from './compareApi';
 import { advance, DISPATCH_THRESHOLD, emptyZoro, THRESHOLD } from './CompareView';
 import type { Labels, ZoroState } from './CompareView';
 import { dispatchApi } from './dispatchApi';
-import type { Assignment, FleetUnit, Patrol, Point, TransferResponse } from './dispatchApi';
+import type { Assignment, FleetUnit, Patrol, Point, TransferReason, TransferResponse } from './dispatchApi';
 import 'leaflet/dist/leaflet.css';
 import './drill.css';
 import './dispatch.css';
@@ -319,6 +319,9 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   // Main symptom the transfer rule used: committed, or the current top estimate while it is still WAIT.
   const [transferSymptom, setTransferSymptom] = useState<{ label: string; p: number; committed: boolean } | null>(null);
   const transferKey = useRef('');
+  const [reason, setReason] = useState<TransferReason | null>(null);
+  const [reasoning, setReasoning] = useState(false);
+  const lastTransfer = useRef<Parameters<typeof dispatchApi.transfer>[0] | null>(null);
   const positions = useRef<Record<string, Point>>({});
   const run = useRef(0);
   const sentKey = useRef('');
@@ -335,6 +338,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
 
   const reset = useCallback(() => {
     run.current += 1; sentKey.current = ''; transferKey.current = ''; setTransfer(null); setTransferSymptom(null);
+    setReason(null); setReasoning(false); lastTransfer.current = null;
     asked.current = new Set();
     setPlaying(false); setBusy(false); setLines([]); setSft(emptyZoro()); setBase(emptyZoro()); setOrders([]);
     setError(null); setShowGold(false);
@@ -381,8 +385,10 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
     transferKey.current = key;
     const myRun = run.current;
     try {
-      const res = await dispatchApi.transfer({ ...call.area.center, turns, subtype: c.subtype?.label,
-        symptom: symptom?.label, urgency: c.urgency?.label });
+      const request = { ...call.area.center, turns, subtype: c.subtype?.label, symptom: symptom?.label,
+        urgency: c.urgency?.label };
+      lastTransfer.current = request;
+      const res = await dispatchApi.transfer(request);
       if (myRun === run.current) { setTransfer(res); setTransferSymptom(symptom); }
     } catch { /* the dispatch view keeps working without hospital data */ }
   }, [call]);
@@ -450,6 +456,22 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   }, [live, call, busy, draft, lines, judge]);
 
   const done = !live && !!call && lines.length >= call.turns.length && !busy;
+
+  // After the call: why Zoro chose that hospital (its own reasoning + leave-one-group-out influence).
+  const explainChoice = useCallback(async () => {
+    if (!lastTransfer.current || reasoning) return;
+    const myRun = run.current;
+    setReasoning(true);
+    try {
+      const turns = lines.map(({ speaker, text }) => ({ speaker, text }));
+      const res = await dispatchApi.transfer({ ...lastTransfer.current, turns, explain: true });
+      if (myRun === run.current) { setTransfer(res); setReason(res.reason ?? null); }
+    } catch { /* keep the current recommendation */ } finally {
+      if (myRun === run.current) setReasoning(false);
+    }
+  }, [lines, reasoning]);
+  useEffect(() => { if (done && transfer?.status === 'ok' && !reason && !reasoning) void explainChoice(); },
+    [done, transfer, reason, reasoning, explainChoice]);
   useEffect(() => {
     if (!playing || busy) return;
     if (done) { setPlaying(false); setShowGold(true); return; }
@@ -638,6 +660,35 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
                   </ol>
                 )}
                 <p className="do-source">{transfer.source} · 위 병원별 정보가 Zoro 선택지 문구로 들어가며, 병원 선택은 공개 Zoro 결정 헤드(학습하지 않은 과제)입니다.</p>
+                {reason ? (
+                  <div className="reason-box">
+                    <h3>선택 이유</h3>
+                    {reason.reasoned ? (
+                      <>
+                        <p className="reason-head">Zoro 추론 원문 (영어로 생각 · {(reason.reasoned.ms / 1000).toFixed(1)}초 · {reason.reasoned.tokens}토큰
+                          {reason.reasoned.finished ? '' : ' · 길이 제한으로 중간까지'}) → <b>{reason.reasoned.choice_name}</b>{' '}
+                          <b className="hl-prob">{Math.round((reason.reasoned.reasoned[reason.reasoned.choice] ?? 0) * 100)}%</b>
+                          <span className="meta"> (추론 전 {Math.round((reason.reasoned.direct[reason.reasoned.choice] ?? 0) * 100)}%)</span></p>
+                        <p className="reason-text">{reason.reasoned.text}</p>
+                      </>
+                    ) : <p className="meta">Zoro 추론을 불러오지 못했습니다.</p>}
+                    {reason.facts.length ? (
+                      <p className="reason-facts"><b>{reason.chosen}</b> vs 2순위 {reason.runner_up}: {reason.facts.join(' · ')}</p>
+                    ) : null}
+                    <ul className="reason-effects">
+                      {reason.effects.map((e) => (
+                        <li key={e.group} data-sign={e.delta > 0.02 ? 'plus' : e.delta < -0.02 ? 'minus' : 'zero'}>
+                          <span>{e.group}</span>
+                          <b className="tabular">{e.delta > 0 ? '+' : ''}{Math.round(e.delta * 100)}%p</b>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="do-source">정보별 영향: {reason.method}. +는 그 정보가 선택을 뒷받침, −는 그 정보가 오히려 선택 확률을 낮춘 경우입니다.</p>
+                  </div>
+                ) : done || live ? (
+                  <button type="button" className="button secondary" disabled={reasoning || !lastTransfer.current} onClick={() => void explainChoice()}>
+                    {reasoning ? 'Zoro가 선택 이유를 쓰는 중… (수 초)' : 'Zoro 선택 이유 보기'}</button>
+                ) : null}
               </>
             )}
           </section>

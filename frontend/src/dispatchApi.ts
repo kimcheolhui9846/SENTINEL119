@@ -21,6 +21,13 @@ export interface TransferResponse {
   hospitals: TransferHospital[];
   zoro: { probabilities: Record<string, number>; choice: string; latency_ms?: number } | null;
   source: string;
+  reason?: TransferReason | null;
+}
+export interface TransferReason {
+  chosen: string; p: number; runner_up: string | null; runner_up_p: number | null; facts: string[]; method: string;
+  effects: { group: string; without: number; delta: number; choice_without: string }[];
+  reasoned: { text: string; finished: boolean; tokens: number; ms: number; direct: Record<string, number>;
+    reasoned: Record<string, number>; choice: string; choice_name: string } | null;
 }
 export interface DispatchResponse { incident: Point; plan: PlanStep[]; assignments: Assignment[] }
 export interface CallArea {
@@ -42,7 +49,7 @@ export const dispatchApi = {
   dispatch: (body: { lat: number; lon: number; dispatch: string; subtype?: string | null; symptom?: string | null;
     urgency?: string | null; busy: string[]; skip: number; positions?: Record<string, Point> }) => call<DispatchResponse>('/dispatch', body),
   transfer: (body: { lat: number; lon: number; turns: { speaker: 0 | 1; text: string }[]; subtype?: string | null;
-    symptom?: string | null; urgency?: string | null }) => call<TransferResponse>('/transfer', body),
+    symptom?: string | null; urgency?: string | null; explain?: boolean }) => call<TransferResponse>('/transfer', body),
   locate: (p: Point) => call<CallArea>(`/locate?lat=${p.lat}&lon=${p.lon}`),
   patrols: () => call<{ patrols: Patrol[]; note: string }>('/patrols'),
 };

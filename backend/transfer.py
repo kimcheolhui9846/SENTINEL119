@@ -217,30 +217,39 @@ async def candidates(point, rule, limit=4):
     return data, sorted(picked, key=lambda h: h["route"]["duration_s"])
 
 
-def _criterion(h, rule):
+# Information groups in the option text; the explanation removes one group at a time.
+GROUPS = {"eta": "도착 시간", "beds": "가용 병상", "procedures": "필요 처치 가능 여부", "equipment": "가용 장비",
+          "messages": "병원 메시지"}
+
+
+def _criterion(h, rule, drop=()):
     """Option text for the Zoro choice: level, road ETA, live beds, procedures, equipment and messages."""
-    parts = [h["level"], f"도착 약 {round(h['route']['duration_s'] / 60)}분 ({h['route']['distance_m'] / 1000:.1f}km)"]
-    if h["beds"]:
+    parts = [h["level"]]
+    if "eta" not in drop:
+        parts.append(f"도착 약 {round(h['route']['duration_s'] / 60)}분 ({h['route']['distance_m'] / 1000:.1f}km)")
+    if "beds" in drop:
+        pass
+    elif h["beds"]:
         parts.append("가용 병상 " + ", ".join(f"{k} {v}" for k, v in h["beds"].items()))
     elif h["er_beds"] is None:
         parts.append("실시간 병상 정보 없음")
-    needed = [p for p in rule["prefer"] if p in h["accepts"]]
-    missing = [p for p in rule["prefer"] if p not in h["accepts"]]
+    needed = [p for p in rule["prefer"] if p in h["accepts"]] if "procedures" not in drop else []
+    missing = [p for p in rule["prefer"] if p not in h["accepts"]] if "procedures" not in drop else []
     if needed:
         parts.append("이 환자에게 필요한 처치 가능: " + ", ".join(needed))
     if missing and h["data"] == "live":
         parts.append("필요 처치 불가·미제공: " + ", ".join(missing))
-    others = [a for a in h["accepts"] if a not in rule["prefer"]]
+    others = [a for a in h["accepts"] if a not in rule["prefer"]] if "procedures" not in drop else []
     if others:
         parts.append("그 밖의 수용 가능 수술·처치: " + ", ".join(others))
-    if h["equipment"]:
+    if h["equipment"] and "equipment" not in drop:
         parts.append("가용 장비: " + ", ".join(h["equipment"]))
-    if h["messages"]:
+    if h["messages"] and "messages" not in drop:
         parts.append("병원 메시지: " + " / ".join(h["messages"]))
     return f"{h['name']} · " + " · ".join(parts)
 
 
-async def zoro_choice(turns, rule, hospitals):
+async def zoro_choice(turns, rule, hospitals, drop=()):
     """Released-head choice over the candidates via the decision server's /v1/choose."""
     url = os.getenv("SENTINEL_ZORO_URL", "").strip().rstrip("/")
     if not url or not hospitals:
@@ -249,7 +258,7 @@ async def zoro_choice(turns, rule, hospitals):
     question = {"instructions": (f"구급 환자를 이송할 병원을 고르세요. 주증상: {rule.get('symptom') or '미상'}. "
                                  f"환자 분류: {rule['category']}. 이송 원칙: {rule['text']}.{need} "
                                  "필요한 처치가 가능하고, 도착 시간이 짧고, 응급실 병상이 있고, 수용 제한 메시지가 없는 병원을 우선합니다."),
-                "criteria": {h["hpid"]: _criterion(h, rule) for h in hospitals}}
+                "criteria": {h["hpid"]: _criterion(h, rule, drop) for h in hospitals}}
     try:
         async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
             response = await client.post(url + "/v1/choose", json={"turns": turns, "question": question})
@@ -262,6 +271,73 @@ async def zoro_choice(turns, rule, hospitals):
             "latency_ms": data.get("latency_ms"), "question": question}
 
 
+def _facts(chosen, other, rule):
+    """Plain comparison of the chosen hospital with the runner-up, from the same data Zoro read."""
+    out = []
+    dt = round((chosen["route"]["duration_s"] - other["route"]["duration_s"]) / 60)
+    out.append(f"도착 {abs(dt)}분 {'더 빠름' if dt < 0 else '더 걸림'}" if dt else "도착 시간 비슷함")
+    a, b = chosen.get("er_beds"), other.get("er_beds")
+    if a is not None and b is not None and a != b:
+        out.append(f"응급실 병상 {abs(a - b)}개 {'더 많음' if a > b else '더 적음'} ({a} vs {b})")
+    need_a = [p for p in rule["prefer"] if p in chosen["accepts"]]
+    need_b = [p for p in rule["prefer"] if p in other["accepts"]]
+    extra = [p for p in need_a if p not in need_b]
+    if extra:
+        out.append("필요 처치 추가 가능: " + ", ".join(extra))
+    lacking = [p for p in need_b if p not in need_a]
+    if lacking:
+        out.append("2순위만 가능한 필요 처치: " + ", ".join(lacking))
+    if not chosen["messages"] and other["messages"]:
+        out.append(f"제한 공지 없음 (2순위: {other['messages'][0][:40]})")
+    elif chosen["messages"] and not other["messages"]:
+        out.append(f"제한 공지 있음: {chosen['messages'][0][:40]}")
+    if LEVELS.index(chosen["level"]) < LEVELS.index(other["level"]):
+        out.append(f"더 높은 등급 ({chosen['level']})")
+    return out
+
+
+async def explain(turns, rule, hospitals, full):
+    """Leave-one-group-out: how much the chosen hospital's probability drops without each information group."""
+    chosen = full["choice"]
+    ablated = await asyncio.gather(*(zoro_choice(turns, rule, hospitals, drop=(g,)) for g in GROUPS))
+    effects = []
+    for group, result in zip(GROUPS, ablated):
+        if result is None:
+            continue
+        effects.append({"group": GROUPS[group], "without": result["probabilities"][chosen],
+                        "delta": full["probabilities"][chosen] - result["probabilities"][chosen],
+                        "choice_without": result["choice"]})
+    effects.sort(key=lambda e: -e["delta"])
+    ranked = sorted(hospitals, key=lambda h: -full["probabilities"][h["hpid"]])
+    best = next(h for h in hospitals if h["hpid"] == chosen)
+    runner = ranked[1] if len(ranked) > 1 else None
+    return {"chosen": best["name"], "p": full["probabilities"][chosen], "effects": effects,
+            "runner_up": runner["name"] if runner else None,
+            "runner_up_p": full["probabilities"][runner["hpid"]] if runner else None,
+            "facts": _facts(best, runner, rule) if runner else [],
+            "method": "정보 묶음을 하나씩 뺀 선택지로 Zoro를 다시 호출해, 선택한 병원의 확률이 줄어든 만큼을 영향으로 표시"}
+
+
+async def zoro_reason(turns, rule, hospitals, question):
+    """Zoro-1 reasoned action on the same hospital question (decision server /v1/reason); None on failure."""
+    url = os.getenv("SENTINEL_ZORO_URL", "").strip().rstrip("/")
+    if not url:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=180.0, trust_env=False) as client:
+            response = await client.post(url + "/v1/reason", json={"turns": turns, "question": question,
+                                                                   "max_new_tokens": 384})
+            response.raise_for_status()
+            data = response.json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    names = {h["hpid"]: h["name"] for h in hospitals}
+    choice = max(data["reasoned"], key=data["reasoned"].get)
+    return {"text": data["reasoning"], "finished": data["reasoning_finished"], "tokens": data["reasoning_tokens"],
+            "ms": data["reasoning_ms"], "direct": data["direct"], "reasoned": data["reasoned"], "choice": choice,
+            "choice_name": names.get(choice, choice)}
+
+
 class TransferRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lat: float = Field(ge=37.0, le=38.0)
@@ -270,6 +346,7 @@ class TransferRequest(BaseModel):
     subtype: str | None = None
     symptom: str | None = None
     urgency: str | None = None
+    explain: bool = False
 
 
 router = APIRouter(prefix="/api/map")
@@ -286,8 +363,14 @@ async def transfer(body: TransferRequest):
     data, hospitals = await candidates(point, rule)
     status = data if data in ("unconfigured", "unavailable") else "ok"
     choice = await zoro_choice(turns, rule, hospitals) if status == "ok" else None
+    reason = None
+    if body.explain and choice:
+        reason, reasoned = await asyncio.gather(explain(turns, rule, hospitals, choice),
+                                                zoro_reason(turns, rule, hospitals, choice["question"]))
+        reason["reasoned"] = reasoned
     for h in hospitals:
         h["context"] = _criterion(h, rule)
     source = ("국립중앙의료원 전국 응급의료기관 정보 조회 서비스 (실시간 병상·수술·장비·메시지)" if data == "live"
               else "국립중앙의료원 병·의원 찾기 서비스 (응급의료기관 등급·위치, 실시간 병상 미연동)")
-    return {"status": status, "data": data, "rule": rule, "hospitals": hospitals, "zoro": choice, "source": source}
+    return {"status": status, "data": data, "rule": rule, "hospitals": hospitals, "zoro": choice, "source": source,
+            "reason": reason}
