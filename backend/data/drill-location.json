@@ -1,0 +1,13 @@
+{
+  "dataset_id": "71768",
+  "level": "label_dong",
+  "city": "서울특별시",
+  "district": "성동구",
+  "dong": "성수동1가",
+  "count": 17,
+  "zone": {
+    "city": "서울특별시",
+    "district": "성동구",
+    "dong": "성수동1가"
+  }
+}

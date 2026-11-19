@@ -4,11 +4,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .hospital_directory import DEFAULT_DISTRICT, SEOUL_DISTRICTS, HospitalDirectory
+from .compare import router as compare_router
 from .scenarios import list_scenarios
 from .sessions import SessionError, SessionService
 
@@ -42,6 +44,7 @@ class SessionEvent(BaseModel):
 
 def create_app(inference=None) -> FastAPI:
     sessions = SessionService(inference=inference)
+    hospitals = HospitalDirectory()
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -57,9 +60,17 @@ def create_app(inference=None) -> FastAPI:
         headers = {"Retry-After": "15"} if error.status == 503 else None
         return JSONResponse(status_code=error.status, content={"detail": error.code}, headers=headers)
 
+    app.include_router(compare_router)
+
     @app.get("/api/scenarios")
     def scenarios():
         return {"scenarios": list_scenarios()}
+
+    @app.get("/api/hospital-locations")
+    async def hospital_locations(district: str = DEFAULT_DISTRICT):
+        if district not in SEOUL_DISTRICTS:
+            raise HTTPException(status_code=422, detail="invalid_district")
+        return await hospitals.locations(district)
 
     @app.post("/api/sessions", status_code=201)
     def create_session(body: CreateSession):

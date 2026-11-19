@@ -91,4 +91,6 @@ def refresh(turn_id, supports, location, vehicles, hospitals):
 
 ## 문서
 
+서울 지도에서 신고자 핀을 누르며 구급·화재 출동을 재현하는 방법은 [자동 모의훈련 실행 안내](docs/handoffs/seoul-drill.md)에 있습니다.
+
 상세 설계와 개발 문서는 [문서 안내](docs/README.md)에서 확인할 수 있습니다.
