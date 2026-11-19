@@ -137,7 +137,7 @@ def render_state(turns):
 
 # Zoro-1 reasoned action (model card "Reasoned action", zoro_decide.py / decide_request.py at the pinned revision):
 # one user message = state + question + options + this instruction, thinking on, sampled at 0.6 / 0.95 / 20, stop at
-think>. The Korean sentence is our addition so the reasoning can be shown on the Korean demo screen./think>. The Korean sentence is our addition so the reasoning can be shown on the Korean demo screen.
+# </think>. The short Korean sentence is our addition; the thinking itself mostly stays in English.
 REASONING_INSTRUCTION = ("Think it through step by step: work out anything that needs calculating or checking, then "
                          "say which option you choose for each question. 한국어로 간결하게 쓰세요.")
 END_THINK = "</think>"
