@@ -100,3 +100,10 @@
 .dispatch-transcript li p { margin: 2px 0; }
 .dispatch-transcript .who { font-size: 12px; color: var(--who); font-weight: 700; }
 .dt-note { display: inline-block; margin-top: 2px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+/* Layout: map + live probabilities on top, call transcript and dispatch orders underneath. */
+.dispatch-map-wrap { height: calc(100vh - 330px); min-height: 480px; }
+.dispatch-side { max-height: calc(100vh - 330px); min-height: 480px; }
+.dispatch-bottom { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.dispatch-bottom .dispatch-transcript ol { max-height: 300px; }
+.dispatch-bottom .dispatch-orders { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+@media (max-width: 1100px) { .dispatch-bottom { grid-template-columns: minmax(0, 1fr); } }

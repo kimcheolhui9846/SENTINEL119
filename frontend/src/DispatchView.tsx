@@ -398,6 +398,15 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
             ) : <p className="meta">첫 발화가 들어오면 확률이 표시됩니다. 막대의 세로선이 확정 기준입니다.</p>}
             <p className="meta">같은 대화에서 base Zoro 확정: {baseFinal}</p>
           </section>
+          {gold ? (
+            <section className="panel dispatch-card">
+              <button type="button" className="button secondary" onClick={() => setShowGold((v) => !v)}>{showGold ? '정답 숨기기' : '정답 라벨 보기'}</button>
+              {showGold ? <p className="dispatch-gold">AI Hub 라벨: {[gold.dispatch, gold.ems_subtype ?? gold.rescue_subtype, `긴급도 ${gold.urgency}`].filter(Boolean).join(' · ')}</p> : null}
+            </section>
+          ) : null}
+        </aside>
+      </div>
+      <div className="dispatch-bottom">
           <section className="panel dispatch-card dispatch-transcript">
             <header className="panel-header"><h2 className="section-title">신고 통화</h2>
               <span className="meta tabular">{lines.length} / {call?.turns.length ?? 0}턴</span></header>
@@ -429,13 +438,6 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
               </ol>
             )}
           </section>
-          {gold ? (
-            <section className="panel dispatch-card">
-              <button type="button" className="button secondary" onClick={() => setShowGold((v) => !v)}>{showGold ? '정답 숨기기' : '정답 라벨 보기'}</button>
-              {showGold ? <p className="dispatch-gold">AI Hub 라벨: {[gold.dispatch, gold.ems_subtype ?? gold.rescue_subtype, `긴급도 ${gold.urgency}`].filter(Boolean).join(' · ')}</p> : null}
-            </section>
-          ) : null}
-        </aside>
       </div>
     </div>
   );
