@@ -1,0 +1,100 @@
+# Secrets and machine-specific configuration
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+.envrc
+*.pem
+*.key
+*.p12
+*.pfx
+/config/*.local.json
+/config/*.local.yaml
+/config/*.local.yml
+/config/*.local.toml
+
+# Python environments, bytecode, and tool caches
+.venv*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.tox/
+.nox/
+.ipynb_checkpoints/
+*.egg-info/
+.eggs/
+
+# JavaScript dependencies and caches; keep package-manager lockfiles tracked
+node_modules/
+.npm/
+.pnpm-store/
+.yarn/cache/
+.vite/
+*.tsbuildinfo
+
+# Build and coverage output
+build/
+dist/
+coverage/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# Downloaded datasets and generated data belong in these directories.
+# Keep curated data/demo/, schemas, and test fixtures trackable.
+/datasets/
+/data/raw/
+/data/interim/
+/data/processed/
+/data/private/
+/data/cache/
+
+# Model weights and training output; model source code remains trackable
+/model_weights/
+/checkpoints/
+/adapters/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.gguf
+.cache/
+.huggingface/
+
+# Experiment logs, generated outputs, and local execution artifacts
+/artifacts/
+/outputs/
+/runs/
+/results/
+/logs/
+wandb/
+mlruns/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local agent runtime
+.omx/
+
+# Editor settings and scratch files
+.idea/
+.vscode/
+/tmp/
+/temp/
+*.swp
+*.swo
+*~
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
