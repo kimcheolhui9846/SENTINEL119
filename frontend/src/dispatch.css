@@ -41,7 +41,7 @@
 .do-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .do-head .tabular { font-size: 13px; color: var(--mint); white-space: nowrap; }
 .do-source { color: var(--text-faint); font-size: 12px !important; }
-.dispatch-transcript ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 260px; overflow-y: auto; font-size: 14px; }
+.dispatch-transcript ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; max-height: 340px; overflow-y: auto; font-size: 15px; }
 .dispatch-transcript li[data-speaker="0"] { color: var(--text-dim); }
 .dispatch-transcript .who { font-size: 12px; color: var(--text-faint); margin-right: 4px; }
 .dt-note { display: block; font-size: 12px; font-weight: 700; }
@@ -57,3 +57,46 @@
 .dispatch-marker.is-patrol svg { width: 1.05rem; height: 1.05rem; }
 .dispatch-legend .legend-note::before { display: none; }
 .dispatch-legend .legend-note { color: #485d6e; }
+
+/* Map overlays: the model's decision on top, the latest utterance as a caption at the bottom. */
+.map-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 600; display: grid; justify-items: center;
+  gap: 2px; min-width: min(560px, 80%); max-width: 90%; padding: 10px 18px; border-radius: 12px; text-align: center;
+  background: #101b25e8; color: #eaf3f6; box-shadow: 0 6px 20px #0008; border: 2px solid var(--line-strong); animation: banner-in 260ms ease-out; }
+.map-banner strong { font-size: 24px; letter-spacing: 0.02em; }
+.map-banner[data-state="wait"] { border-color: var(--amber); }
+.map-banner[data-state="wait"] strong { color: var(--amber); }
+.map-banner[data-state="commit"] { border-color: var(--mint); background: #07231ef0; animation: banner-in 260ms ease-out, banner-pulse 1.2s ease-out 2; }
+.map-banner[data-state="commit"] strong { color: var(--mint); }
+.map-banner-tag { font-size: 12px; color: var(--text-faint); font-weight: 700; }
+.map-banner-detail { font-size: 15px; color: var(--text-dim); }
+.map-caption { position: absolute; left: 50%; bottom: 52px; transform: translateX(-50%); z-index: 600; width: min(820px, 88%);
+  padding: 12px 18px; border-radius: 12px; background: #0b141ce6; color: #f4f8fa; box-shadow: 0 6px 20px #0008;
+  border-left: 6px solid var(--who); animation: caption-in 300ms ease-out; }
+.map-caption[data-speaker="1"] { --who: #a58ce0; }
+.map-caption[data-speaker="0"] { --who: #84b7d5; }
+.map-caption-who { font-size: 13px; color: var(--who); font-weight: 700; }
+.map-caption p { margin: 2px 0 0; font-size: 22px; line-height: 1.4; }
+@keyframes banner-in { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes caption-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes banner-pulse { 0% { box-shadow: 0 0 0 0 #59d7bfaa; } 100% { box-shadow: 0 0 0 18px #59d7bf00; } }
+@media (prefers-reduced-motion: reduce) { .map-banner, .map-caption { animation: none; } }
+/* Probability bars with the commit threshold as a vertical line. */
+.prob-block { display: grid; gap: 4px; padding: 8px 10px; border-radius: var(--radius); background: var(--panel-2); border: 1px solid var(--line); }
+.prob-block[data-state="commit"] { border-color: var(--mint); }
+.prob-head { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--text-faint); }
+.prob-head strong { font-size: 15px; color: var(--amber); }
+.prob-block[data-state="commit"] .prob-head strong { color: var(--mint); }
+.prob-row { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr) 2.8rem; gap: 8px; align-items: center; font-size: 14px; }
+.prob-row[data-picked="true"] .prob-label { color: var(--mint); font-weight: 800; }
+.prob-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prob-track { position: relative; height: 10px; border-radius: 5px; background: var(--field); }
+.prob-fill { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: var(--action); transition: width 300ms ease; }
+.prob-row[data-picked="true"] .prob-fill { background: var(--mint); }
+.prob-need { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--amber); }
+.prob-value { text-align: right; color: var(--text-dim); }
+.dispatch-transcript li { padding: 6px 10px; border-radius: 10px; background: var(--panel-2); border-left: 4px solid var(--who); }
+.dispatch-transcript li[data-speaker="1"] { --who: #a58ce0; }
+.dispatch-transcript li[data-speaker="0"] { --who: #84b7d5; color: var(--text-dim); }
+.dispatch-transcript li p { margin: 2px 0; }
+.dispatch-transcript .who { font-size: 12px; color: var(--who); font-weight: 700; }
+.dt-note { display: inline-block; margin-top: 2px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
