@@ -183,7 +183,15 @@ class Guard:
     probabilities. Every active recommendation uses the current reviewed facts.
     """
 
-    def __init__(self, session_id, *, max_response_age_s=5.0, clock=monotonic):
+    def __init__(self, session_id, *, max_response_age_s=5.0, clock=monotonic, thresholds=None):
+        """thresholds {dispatch|urgency: p} switches a task from reviewed support to model confidence:
+        COMMIT when the top probability reaches p, and an earlier COMMIT stays until another label
+        reaches p. Urgency waits for a committed dispatch (the hierarchy opens after the type)."""
+        thresholds = dict(thresholds or {})
+        if any(task not in _LABELS or type(value) not in (int, float) or not 0 < value <= 1
+               for task, value in thresholds.items()):
+            raise ValueError("thresholds map dispatch/urgency to a probability in (0, 1]")
+        self._thresholds = thresholds
         if not _nonblank(session_id):
             raise ValueError("session_id must be a nonblank string")
         if (type(max_response_age_s) not in (int, float)
@@ -228,6 +236,8 @@ class Guard:
             self._pending.clear()
             for task in _LABELS:
                 current = self._active[task]
+                if task in self._thresholds:
+                    continue
                 if current.status == "COMMIT" and supports[task] != {
                         current.choice: current.evidence_turn_ids}:
                     self._set_active(self._result(task, "WAIT", "reviewed support changed"))
@@ -298,6 +308,8 @@ class Guard:
                 choice, probabilities = model_choice
                 if downstream:
                     result = self._candidate_decision(task, choice, probabilities)
+                elif task in self._thresholds:
+                    result = self._threshold_decision(task, choice, probabilities)
                 else:
                     support = self._supports[task]
                     if len(support) == 1 and choice in support:
@@ -332,6 +344,22 @@ class Guard:
         return self._result(task, "COMMIT", "reviewed dispatch, location and candidate match",
                             choice, evidence, probabilities)
 
+    def _threshold_decision(self, task, choice, probabilities):
+        current = self._active[task]
+        if task != "dispatch" and self._active["dispatch"].status != "COMMIT":
+            return self._result(task, "WAIT", "requires a committed dispatch", probabilities=probabilities)
+        if probabilities[choice] >= self._thresholds[task]:
+            if current.status == "COMMIT" and current.choice == choice:
+                evidence = current.evidence_turn_ids
+            else:
+                evidence = (self._turn,)
+            return self._result(task, "COMMIT", "model probability reached threshold",
+                                choice, evidence, probabilities)
+        if current.status == "COMMIT":
+            return self._result(task, "COMMIT", "model probability reached threshold",
+                                current.choice, current.evidence_turn_ids, probabilities)
+        return self._result(task, "WAIT", "model probability below threshold", probabilities=probabilities)
+
     def _dependent_status(self):
         dispatch = self._active["dispatch"]
         if dispatch.status == "COMMIT" and dispatch.choice != "구급":
@@ -340,7 +368,9 @@ class Guard:
 
     def _failed(self, task, reason):
         status = self._dependent_status() if task in _DEPENDENTS else "WAIT"
-        self._set_active(self._result(task, status, reason))
+        # A failed call does not withdraw a confidence commit; only a stronger label replaces it.
+        if not (task in self._thresholds and self._active[task].status == "COMMIT"):
+            self._set_active(self._result(task, status, reason))
         return self._result(task, "ERROR", reason)
 
     def _set_active(self, result):

@@ -18,6 +18,11 @@ _INTAKE = ("dispatch", "urgency")
 _CANDIDATES = {"vehicle": "vehicles", "hospital": "hospitals"}
 _TASKS = (*_INTAKE, *_CANDIDATES)
 _RESPONSE_MAX_AGE_S = 5.0
+# Live confidence rule (dev turn prefixes, reward +1 correct / -4 wrong / 0 never): dispatch first,
+# then subtype / urgency / EMS symptom once the dispatch type is committed.
+_THRESHOLDS = {"dispatch": 0.9, "urgency": 0.85}
+_HIERARCHY_THRESHOLDS = {"subtype": 0.85, "symptom": 0.8}
+_SUBTYPE_OF = {"구급": "ems_subtype", "구조": "rescue_subtype"}
 _INTAKE_LABELS = {
     "dispatch": {label: label for label in ("화재", "구조", "구급", "기타")},
     "urgency": {label: label for label in ("상", "중", "하")},
@@ -33,6 +38,9 @@ _REASONS = {
     "no unique matching reviewed support": "현재 발화에서 판단 근거를 더 확인해야 합니다.",
     "invalid Zoro choice response": "선택 응답의 형식을 확인할 수 없습니다.",
     "Zoro response expired": "모델 응답 시간이 초과되었습니다.",
+    "model probability reached threshold": "모델 확률이 확정 기준을 넘었습니다.",
+    "model probability below threshold": "확률이 확정 기준에 못 미쳐 다음 발화를 기다립니다.",
+    "requires a committed dispatch": "출동유형이 확정된 뒤 판단합니다.",
 }
 
 
@@ -65,6 +73,7 @@ class _Session:
     history_count: int = 0
     hospital_observations: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
+    hierarchy: dict = field(default_factory=dict)
     eligible: dict = field(default_factory=dict)
     candidate_versions: dict = field(default_factory=dict)
     trackers: dict = field(default_factory=lambda: {
@@ -107,6 +116,11 @@ def _expire_vehicle_rows(frame, now):
     return changed
 
 
+def _candidate_text(item):
+    eta = f" · 도착 예정 {item['eta_min']}분" if item.get("eta_min") is not None else ""
+    return f"{item['name']}{eta} · {item['detail']}"
+
+
 def _reason(decision):
     return _REASONS.get(decision.reason, "현재 조건을 확인한 뒤 다시 판단합니다.")
 
@@ -114,10 +128,10 @@ def _reason(decision):
 def _wait_reason(session, task, decision):
     if task == "vehicle" and session.applied_vehicle is not None:
         return "모의 출동이 적용되었습니다."
-    if session.manual:
+    if session.manual and session.mode != "live":
         return "직접 입력의 근거가 검토될 때까지 기다립니다."
     if task not in _CANDIDATES:
-        return "현재 발화에서 판단 근거를 더 확인해야 합니다."
+        return _reason(decision) if session.mode == "live" else "현재 발화에서 판단 근거를 더 확인해야 합니다."
     if session.guard.active("dispatch").status != "COMMIT":
         return "구급 출동유형 확인을 기다립니다."
     if session.frame["location"] is None:
@@ -159,9 +173,13 @@ class SessionService:
             raise SessionError(404, "scenario_not_found")
         if mode not in ("simulation", "live"):
             raise SessionError(422, "invalid_mode")
+        if mode == "simulation" and scenario.get("live_only"):
+            raise SessionError(422, "live_only_scenario")
         session_id = str(uuid4())
         session = _Session(
-            session_id, scenario, mode, Guard(session_id, max_response_age_s=_RESPONSE_MAX_AGE_S),
+            session_id, scenario, mode,
+            Guard(session_id, max_response_age_s=_RESPONSE_MAX_AGE_S,
+                  thresholds=_THRESHOLDS if mode == "live" and scenario.get("live_only") else None),
             get_frame(scenario_id, 0),
         )
         self._observe_hospitals(session, session.frame)
@@ -192,7 +210,8 @@ class SessionService:
                 tasks = _TASKS
             elif action == "text":
                 self._text(session, text)
-                tasks = ()
+                # Live mode judges typed turns by model confidence; simulation has no reviewed support for them.
+                tasks = _TASKS if session.mode == "live" else ()
             elif action == "retry":
                 tasks = self._retry(session)
             else:
@@ -430,8 +449,9 @@ class SessionService:
                 criteria = {task: _INTAKE_LABELS[task] for task in tasks}
                 state = {"turns": deepcopy(session.turns)}
             else:
-                criteria = {role: {item["id"]: item["name"] for item in session.eligible[role].values()}}
+                criteria = {role: {item["id"]: _candidate_text(item) for item in session.eligible[role].values()}}
                 state = {
+                    "turns": deepcopy(session.turns),
                     "incident_type": dispatch.choice,
                     "incident_evidence_turns": list(dispatch.evidence_turn_ids),
                     "location": session.frame["location"][0],
@@ -498,9 +518,35 @@ class SessionService:
                     "latency_ms": elapsed,
                     "error": error_message,
                 }
+            if role == "intake" and envelope and envelope.get("hierarchy"):
+                self._update_hierarchy(session, envelope["hierarchy"], turn_id)
             self._revise_vehicle_recommendation(session, previous_vehicle)
             self._sync_history(session)
             session.view_revision += 1
+
+    @staticmethod
+    def _update_hierarchy(session, outputs, turn_id):
+        """Subtype (구급 8 / 구조 4) and EMS main symptom, opened only under a committed parent type."""
+        dispatch = session.guard.active("dispatch")
+        parent = dispatch.choice if dispatch.status == "COMMIT" else None
+        questions = {"subtype": _SUBTYPE_OF.get(parent), "symptom": "ems_symptom" if parent == "구급" else None}
+        for slot, qid in questions.items():
+            previous = session.hierarchy.get(slot)
+            if qid is None:  # the parent type changed or is not committed: the slot closes
+                session.hierarchy.pop(slot, None)
+                continue
+            if qid not in outputs:  # a reply without this question keeps the previous state
+                continue
+            labels = outputs[qid]["labels"]
+            probabilities = {labels.get(key, key): value for key, value in outputs[qid]["probabilities"].items()}
+            best = max(probabilities, key=probabilities.get)
+            item = {"question": qid, "parent": parent, "probabilities": probabilities,
+                    "threshold": _HIERARCHY_THRESHOLDS[slot], "status": "WAIT", "choice": None, "turn": None}
+            if previous and previous["parent"] == parent and previous["status"] == "COMMIT":
+                item.update(status="COMMIT", choice=previous["choice"], turn=previous["turn"])
+            if probabilities[best] >= item["threshold"] and best != item["choice"]:
+                item.update(status="COMMIT", choice=best, turn=turn_id)
+            session.hierarchy[slot] = item
 
     @staticmethod
     def _log(session, turn, task, status, choice, reason):
@@ -524,6 +570,8 @@ class SessionService:
             "turn_id": len(session.turns), "total_steps": session.scenario["turn_count"], "step": session.step,
             "processing": session.processing, "manual": session.manual, "turns": deepcopy(session.turns),
             "decisions": {task: self._decision_view(session, task) for task in _TASKS},
+            "hierarchy": deepcopy(session.hierarchy) if session.mode == "live" else {},
+            "area": deepcopy(session.frame.get("area")), "units": deepcopy(session.frame.get("units", [])),
             "vehicles": deepcopy(session.frame["vehicles"]),
             "hospitals": deepcopy(session.frame["hospitals"]),
             "location": location[0] if location else None, "external_status": session.frame["external_status"],

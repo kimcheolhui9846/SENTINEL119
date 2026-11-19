@@ -1,4 +1,4 @@
-import type { Candidate, Decision, Session, Task } from './api';
+import type { Candidate, Decision, HierarchyItem, Session, Task } from './api';
 
 const tasks: Task[] = ['dispatch', 'urgency', 'vehicle', 'hospital'];
 const taskInfo: Record<Task, { name: string; role: string }> = {
@@ -79,6 +79,30 @@ function DecisionCard({ task, decision, session }: { task: Task; decision: Decis
   );
 }
 
+const hierarchyNames = { subtype: '세부유형', symptom: '주증상' } as const;
+
+function HierarchyCard({ slot, item }: { slot: 'subtype' | 'symptom'; item: HierarchyItem }) {
+  const ranked = Object.entries(item.probabilities).sort((a, b) => b[1] - a[1]);
+  const committed = item.status === 'COMMIT';
+  return (
+    <article className="decision-card" data-status={item.status} aria-labelledby={`task-${slot}`}>
+      <div className="meta">수보요원 · {item.parent} 하위 판단</div>
+      <div className="card-heading">
+        <h3 id={`task-${slot}`} className="card-name">{hierarchyNames[slot]}</h3>
+        <span className={`status ${committed ? 'commit' : 'wait'}`}>{committed ? '확정' : '보류'}</span>
+      </div>
+      <p className="choice">{item.choice ?? '판단 대기'}</p>
+      <p className="reason">{committed ? `${item.turn}턴에 확률이 확정 기준 ${Math.round(item.threshold * 100)}%를 넘었습니다.`
+        : `최고 확률이 확정 기준 ${Math.round(item.threshold * 100)}%에 못 미칩니다.`}</p>
+      <ul className="hierarchy-probs" aria-label="모델 선택 확률">
+        {ranked.slice(0, 3).map(([label, value]) => (
+          <li key={label}><span>{label}</span><span className="tabular">{Math.round(value * 100)}%</span></li>
+        ))}
+      </ul>
+    </article>
+  );
+}
+
 export function DecisionsPanel({ session }: { session: Session }) {
   return (
     <section className="panel" aria-labelledby="decisions-heading">
@@ -87,7 +111,12 @@ export function DecisionsPanel({ session }: { session: Session }) {
         <span className="meta" aria-live="polite">{session.processing ? '판단 중' : '현재 판단'}</span>
       </header>
       <div className="decisions-grid">
-        {tasks.map((task) => <DecisionCard key={task} task={task} decision={session.decisions[task]} session={session} />)}
+        {tasks.slice(0, 2).map((task) => <DecisionCard key={task} task={task} decision={session.decisions[task]} session={session} />)}
+        {(['subtype', 'symptom'] as const).map((slot) => {
+          const item = session.hierarchy?.[slot];
+          return item ? <HierarchyCard key={slot} slot={slot} item={item} /> : null;
+        })}
+        {tasks.slice(2).map((task) => <DecisionCard key={task} task={task} decision={session.decisions[task]} session={session} />)}
       </div>
     </section>
   );

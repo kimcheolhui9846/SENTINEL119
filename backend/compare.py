@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import httpx
+
+from .call_area import find_area
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,12 +30,22 @@ class CompareRequest(BaseModel):
 
 
 def _calls():
+    """Comparison calls come from the same cached, validated loader as the session scenarios."""
+    from .scenarios import _call_files
+    return {key: {"id": key, "title": c["title"], "summary": c["summary"], "private": c["private"], "gold": c["gold"],
+                  "area": c["area"], "turns": [{"speaker": 0 if who == "수보요원" else 1, "text": text}
+                                               for who, text in c["turns"]]}
+            for key, c in _call_files().items()}
+
+
+def _calls_uncached():
     calls = {}
     for root in filter(None, os.getenv("SENTINEL_SCENARIO_DIRS", "").split(os.pathsep)):
         for path in sorted(Path(root).glob("*.json")):
             data = json.loads(path.read_text(encoding="utf-8"))
             calls[data["id"]] = {"id": data["id"], "title": data["title"], "summary": data.get("summary", ""),
                                  "private": "private" in path.parts, "gold": data.get("gold"),
+                                 "area": find_area(data.get("address"), seed=data["id"]),
                                  "turns": [{"speaker": 1 if t["speaker"] else 0, "text": t["text"]} for t in data["turns"]]}
     return calls
 
@@ -64,7 +76,8 @@ router = APIRouter(prefix="/api/compare")
 
 @router.get("")
 def compare_calls():
-    return {"scenarios": [{key: call[key] for key in ("id", "title", "summary", "private")}
+    return {"scenarios": [{**{key: call[key] for key in ("id", "title", "summary", "private")},
+                           "area": f"{call['area']['district']} {call['area']['dong']}" if call["area"] else None}
                           for call in _calls().values()]}
 
 

@@ -9,9 +9,10 @@ from .inference import _CALL_TIMEOUT, InferenceError, _json_request, _role_endpo
 from .team_demo import _model_identity, _turn_prefix
 
 
+# Final checkpoint H4 (zoro-hier-h4, step 440). Override with ZORO_INTAKE_MODEL_ID when serving another one.
 _PINNED_MODEL = (
-    "team-demo/sft/zoro-hier-h1b@sha256:"
-    "43cf604704034ef75acffec94cf27cf7222dbbe91e28013f1fb6ebda384aa87a"
+    "team-demo/sft/zoro-hier-h4@sha256:"
+    "2596316b5f53d7cceb99afbc984d21e4ce12b35e2ab2577b7b50cc66b28d264c"
 )
 _DISPATCH = {"fire", "rescue", "ems", "other"}
 _EMS_SUBTYPES = {

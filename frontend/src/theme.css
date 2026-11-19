@@ -1,0 +1,53 @@
+/* Colour-only light theme after the NEMC "내 손안의 응급실" board (grey-blue canvas, white cards, coral bar,
+   status green / amber / red). Layout, spacing, radius and fonts stay as in the console styles. */
+:root {
+  color-scheme: light;
+  --bg: #f0f3f7;
+  --bg-deep: #e6eaf0;
+  --panel: #ffffff;
+  --panel-2: #f7f9fb;
+  --panel-3: #eef2f6;
+  --field: #eef1f5;
+  --line: #dde1e9;
+  --line-soft: #e9edf2;
+  --line-strong: #aab0bc;
+  --text: #2a2e39;
+  --text-dim: #495464;
+  --text-faint: #89929f;
+  --action: #458ed3;
+  --action-strong: #346a9e;
+  --action-ink: #ffffff;
+  --action-bg: rgba(69, 142, 211, 0.1);
+  --mint: #2f9e6f;
+  --mint-ink: #ffffff;
+  --mint-bg: rgba(84, 178, 137, 0.12);
+  --amber: #c27c0e;
+  --amber-bg: rgba(223, 149, 30, 0.12);
+  --error: #e5484d;
+  --error-strong: #d93036;
+  --error-bg: rgba(239, 68, 68, 0.09);
+  --muted-bg: rgba(73, 84, 100, 0.06);
+}
+body, .app-shell { background: var(--bg); color: var(--text); }
+.masthead { background: #fa7157; }
+.masthead .brand-name { color: #fff; }
+.masthead .nav-tab { color: rgba(255, 255, 255, 0.85); }
+.masthead .nav-tab:hover { color: #fff; }
+.masthead .nav-tab.active, .masthead .nav-tab[aria-selected="true"] { color: #fff; }
+.masthead .mode-indicator { color: #fff; border-color: rgba(255, 255, 255, 0.6); }
+.button.primary { color: #fff; }
+.map-banner { background: rgba(255, 255, 255, 0.97); color: var(--text); }
+.map-banner[data-state="commit"] { background: #f2fbf6; }
+.map-banner[data-state="wait"] { background: #fffaf0; }
+.map-banner-detail .hl-label { color: var(--text); }
+.map-caption p { color: #ffffff; }
+.map-follow { background: #fff; color: var(--text-dim); }
+.prob-fill { background: #9fc4e8; }
+.prob-row[data-picked="true"] .prob-fill { background: #54b289; }
+.prob-need { background: #df951e; }
+.dispatch-transcript li[data-speaker="1"] { --who: #8054e7; background: #f6f2ff; }
+.dispatch-transcript li[data-speaker="0"] { --who: #458ed3; color: var(--text); }
+.transfer-list li[data-chosen="true"] { background: #f4fbf7; }
+.hf-chip { background: #fff; }
+.hf-msg { background: #fff8eb; }
+.hf-msg.is-block { background: #fff1f1; }
