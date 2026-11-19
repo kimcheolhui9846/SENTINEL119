@@ -84,3 +84,19 @@ SFT 검증은 출동유형과 긴급도부터 시작한다. 차량과 병원은 
 4. 첫 데모에서는 합성 어댑터와 로컬 모델 서버 대역을 연결해 같은 세션·UI 계약을 확인한다. 병원 버전만 바꿔 차량 판단이 유지되는지, 후보 버전이 어긋난 응답이 폐기되는지 검사한다.
 5. 기존 하네스 테스트, 새 API 테스트, 프론트 프로덕션 빌드와 실제 브라우저의 데스크톱·좁은 화면 조작을 각각 실행한다.
 6. 모델 인계 후 역할별 반례와 전체 전달 흐름을 합성 시나리오로 재현한다. 수보는 긴급도 하향 오판과 근거 전 확정, 배차는 가용 해제 차량 추천, 병원연락은 수용 정보가 미상인데 확정으로 표시되는 사례를 검사한다. 라벨·후보 순서 역전, 잘못된 점수, 현재 요청의 보류와 늦은 보류도 확인한다. 특화 하네스 효과는 동일한 체크포인트·head에 공용 하네스만 붙인 조건과 비교한다. 세 비교 조건을 같은 평가 표본에서 재현하고 세션·UI 계약도 다시 확인한다.
+
+## 외부 경로·병원 추천 기능 검토
+
+공개 `2025-ermct-project`의 고정 커밋에서 백엔드 기능과 테스트를 검토했다. 이번 변경 범위는 문서이며 실시간 Tmap·NMC 호출은 수행하지 않았다. [라우팅 API](https://github.com/Jaeuk-Han/2025-ermct-project/blob/8a7f7689a0edf85892d5622a56655e595caacb10/app/main.py#L1854-L1941)
+
+- Tmap 자동차 경로 API v1에 `POST`로 요청하고 `appKey` 헤더를 전달한다. 좌표계는 `WGS84GEO`이며 x는 경도, y는 위도다. 응답의 도로 거리와 소요시간 단위는 m와 초다. 상세 경로는 `LineString`과 `MultiLineString`에서 읽는다. [요청·경로 처리](https://github.com/Jaeuk-Han/2025-ermct-project/blob/8a7f7689a0edf85892d5622a56655e595caacb10/app/distance_logic.py#L13-L171) · [응답 단위](https://github.com/Jaeuk-Han/2025-ermct-project/blob/8a7f7689a0edf85892d5622a56655e595caacb10/app/schemas.py#L433-L448)
+- 병원 후보 상위 3곳은 도로 거리, 소요시간, 임상 조건 충족 점수, 우선순위 점수 순으로 정렬한다. 테스트에서 1 km·500초가 2 km·100초보다 앞선다. 단일 경로 조회 실패는 HTTP 502다. 병원 순위 조회는 경로 계산에 실패한 후보를 제외하므로 모두 실패하면 HTTP 200과 빈 `hospitals` 목록을 반환할 수 있다. [거리·순위 계산](https://github.com/Jaeuk-Han/2025-ermct-project/blob/8a7f7689a0edf85892d5622a56655e595caacb10/app/distance_logic.py#L43-L98) · [순위 테스트](https://github.com/Jaeuk-Han/2025-ermct-project/blob/8a7f7689a0edf85892d5622a56655e595caacb10/tests/test_nearest_ranking.py#L63-L162) · [라우팅 API](https://github.com/Jaeuk-Han/2025-ermct-project/blob/8a7f7689a0edf85892d5622a56655e595caacb10/app/main.py#L1854-L1941)
+- NMC 병원 요약은 HPID로 실시간 병상, 중증질환 수용 가능 정보, 응급실 메시지를 연결하고 실시간 병상 응답의 `hvidate`를 원천 시각으로 보존한다. 추천은 연락할 병원 후보를 제시하는 단계다. 환자별 실제 수용 여부는 병원 연락으로 확인해야 한다. [병원 요약](https://github.com/Jaeuk-Han/2025-ermct-project/blob/8a7f7689a0edf85892d5622a56655e595caacb10/app/main.py#L1140-L1264) · [원천 시각 매핑](https://github.com/Jaeuk-Han/2025-ermct-project/blob/8a7f7689a0edf85892d5622a56655e595caacb10/app/services/ermct_client.py#L188-L204)
+
+향후 연동에서는 다음 기준을 적용한다. [프로젝트 명세 §5](../../spec.md#5-지침자원병원-세계)
+
+1. 배차는 차량 위치에서 신고 현장까지, 병원 비교는 신고 현장에서 병원까지의 방향으로 계산한다. [역할별 입력과 경계](#모델-인계-후-특화-하네스)
+2. 조회 실패 후보는 미상으로 보존하고 자료 출처·원천 시각·수집 시각을 기록한다. 시나리오에서 제공한 이동 시간은 `가상 ETA`로 표시한다. [프로젝트 명세 §5](../../spec.md#5-지침자원병원-세계)
+3. 외부 경로·병원 상태는 후보의 사실로 전달한다. Zoro는 적격 후보를 비교해 선택을 제안하고 공용 Guard가 확정 또는 보류한다. [호출 계약](#호출-계약과-실패-처리)
+
+향후 원본 코드를 복사할 경우 저작권 및 MIT 허가 고지를 포함한다. [MIT 라이선스](https://github.com/Jaeuk-Han/2025-ermct-project/blob/8a7f7689a0edf85892d5622a56655e595caacb10/LICENSE.txt)

@@ -123,7 +123,7 @@ export function CandidatePanel({ kind, session }: { kind: 'vehicle' | 'hospital'
               </div>
               <div className="candidate-detail">
                 <span>{candidate.detail}</span>
-                {candidate.eta_min !== null && <span className="candidate-eta">예상 {candidate.eta_min}분</span>}
+                {candidate.eta_min !== null && <span className="candidate-eta">가상 ETA {candidate.eta_min}분</span>}
               </div>
               <p className="meta">{candidate.source} · <CandidateTime value={candidate.source_at} /></p>
             </li>

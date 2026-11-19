@@ -142,9 +142,18 @@ export default function App() {
               <section className="panel transcript-panel" aria-labelledby="transcript-heading">
                 <header className="panel-header">
                   <h2 id="transcript-heading" className="section-title">신고 대화</h2>
-                  <span className="turn-counter" aria-live="polite">
-                    {session.manual ? `직접 입력 · ${session.turn_id}턴` : `${session.step} / ${session.total_steps}턴`}
-                  </span>
+                  <div className="turn-progress">
+                    <span className="turn-counter" aria-live="polite">
+                      {session.manual ? `직접 입력 · ${session.turn_id}턴` : `${session.step} / ${session.total_steps}턴`}
+                    </span>
+                    {!session.manual && session.total_steps > 0 && (
+                      <span className="turn-ticks" aria-hidden="true">
+                        {Array.from({ length: session.total_steps }, (_, index) => (
+                          <i key={index} data-filled={index < Math.min(session.step, session.total_steps) ? 'true' : 'false'} />
+                        ))}
+                      </span>
+                    )}
+                  </div>
                 </header>
                 <Transcript session={session} />
                 <div className="controls">
