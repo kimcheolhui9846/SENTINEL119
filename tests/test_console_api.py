@@ -63,18 +63,126 @@ class ConsoleFlow(unittest.TestCase):
             frame["vehicles"][0]["expires_at"] = "2026-11-19T05:01:00+00:00"
             return frame
 
-        with patch("backend.sessions.get_frame", expiring_vehicle):
-            with patch("backend.sessions._now", return_value=datetime(2026, 11, 19, 5, 0, tzinfo=timezone.utc)):
+        for get_first in (False, True):
+            with (self.subTest(get_first=get_first),
+                  patch("backend.sessions.get_frame", expiring_vehicle),
+                  patch("backend.sessions._now", return_value=datetime(2026, 11, 19, 5, 0, tzinfo=timezone.utc)) as now):
                 ready = self.event(self.create("reroute"))
-            self.assertEqual(ready["decisions"]["vehicle"]["choice"], "A")
-            url = "/api/sessions/" + ready["id"]
-            with patch("backend.sessions._now", return_value=datetime(2026, 11, 19, 5, 1, tzinfo=timezone.utc)):
+                self.assertEqual(ready["decisions"]["vehicle"]["choice"], "A")
+                self.assertEqual(ready["vehicles"][0]["availability"], "available")
+                url = "/api/sessions/" + ready["id"]
+                now.return_value = datetime(2026, 11, 19, 5, 1, tzinfo=timezone.utc)
+                stale = self.client.post(url + "/events", json={
+                    "action": "dispatch", "expected_version": ready["version"] - 1, **self.dispatch_proof(ready),
+                })
+                self.assertEqual(stale.status_code, 409, stale.text)
+                self.assertEqual(stale.json(), {"detail": "stale_version"})
+                if get_first:
+                    withdrawn = self.client.get(url).json()
+                    self.assertEqual(withdrawn["decisions"]["vehicle"]["status"], "WAIT")
                 response = self.client.post(url + "/events", json={
                     "action": "dispatch", "expected_version": ready["version"], **self.dispatch_proof(ready),
                 })
-            self.assertEqual(response.status_code, 409, response.text)
-            self.assertEqual(response.json(), {"detail": "vehicle_not_ready"})
-            self.assertIsNone(self.client.get(url).json()["applied_vehicle"])
+                self.assertEqual(response.status_code, 409, response.text)
+                self.assertEqual(response.json(), {"detail": "vehicle_not_ready"})
+                updated = self.client.get(url).json()
+                self.assertIsNone(updated["applied_vehicle"])
+                self.assertEqual(updated["version"], ready["version"])
+                self.assertEqual(updated["view_revision"], ready["view_revision"] + 1)
+                self.assertEqual(updated["decisions"]["vehicle"]["status"], "WAIT")
+                self.assertIsNone(updated["decisions"]["vehicle"]["choice"])
+                self.assertEqual(updated["decisions"]["vehicle"]["recommendation_revision"],
+                                 ready["decisions"]["vehicle"]["recommendation_revision"] + 1)
+                self.assertEqual(updated["decisions"]["hospital"], ready["decisions"]["hospital"])
+                self.assertEqual(updated["vehicles"][0]["availability"], "unknown")
+                self.assertEqual(updated["vehicles"][0]["source_at"], ready["vehicles"][0]["source_at"])
+                self.assertEqual(self.client.get(url).json(), updated)
+
+    def test_dispatched_vehicle_stays_unavailable_when_its_observation_expires(self):
+        from backend.scenarios import get_frame
+
+        starting = datetime(2026, 11, 19, 5, 0, tzinfo=timezone.utc)
+        expired = datetime(2026, 11, 19, 5, 1, tzinfo=timezone.utc)
+
+        def expiring_vehicle(scenario_id, step, hospital_retry=False):
+            frame = get_frame(scenario_id, step, hospital_retry)
+            frame["vehicles"][0]["expires_at"] = expired.isoformat()
+            return frame
+
+        with (patch("backend.sessions.get_frame", expiring_vehicle),
+              patch("backend.sessions._now", return_value=starting) as now):
+            ready = self.event(self.create("reroute"))
+            applied = self.event(ready, "dispatch")
+            self.assertEqual(applied["applied_vehicle"], "A")
+            self.assertEqual(applied["vehicles"][0]["availability"], "unavailable")
+            now.return_value = expired
+            url = "/api/sessions/" + ready["id"]
+            duplicate = self.client.post(url + "/events", json={
+                "action": "dispatch", "expected_version": applied["version"], **self.dispatch_proof(ready),
+            })
+            self.assertEqual(duplicate.status_code, 409, duplicate.text)
+            self.assertEqual(duplicate.json(), {"detail": "dispatch_already_applied"})
+            self.assertEqual(self.client.get(url).json(), applied)
+
+    def test_late_vehicle_answer_cannot_restore_expired_candidate(self):
+        from backend.api import create_app
+        from backend.inference import Inference
+        from backend.scenarios import get_frame
+        from fastapi.testclient import TestClient
+
+        starting = datetime(2026, 11, 19, 5, 0, tzinfo=timezone.utc)
+        expired = datetime(2026, 11, 19, 5, 1, tzinfo=timezone.utc)
+
+        def expiring_vehicle(scenario_id, step, hospital_retry=False):
+            frame = get_frame(scenario_id, step, hospital_retry)
+            frame["vehicles"][0]["expires_at"] = expired.isoformat()
+            return frame
+
+        for get_first, hospital_deadline_passed in ((False, False), (True, False), (True, True)):
+            started = {role: Event() for role in ("vehicle", "hospital")}
+            finish = Event()
+
+            class PendingCandidates(Inference):
+                def decide(self, mode, role, state, criteria, simulation_choices):
+                    if role in started:
+                        started[role].set()
+                        if not finish.wait(3):
+                            raise RuntimeError("Test did not release inference")
+                    return super().decide(mode, role, state, criteria, simulation_choices)
+
+            with (self.subTest(get_first=get_first, hospital_deadline_passed=hospital_deadline_passed),
+                  patch("backend.sessions.get_frame", expiring_vehicle),
+                  patch("backend.sessions._now", return_value=starting) as now,
+                  patch("backend.sessions.monotonic", return_value=1.0) as monotonic,
+                  TestClient(create_app(inference=PendingCandidates())) as client):
+                response = client.post("/api/sessions", json={"scenario_id": "reroute", "mode": "simulation"})
+                url = "/api/sessions/" + response.json()["id"]
+                try:
+                    response = client.post(url + "/events", json={"action": "next", "expected_version": 0})
+                    self.assertEqual(response.status_code, 202)
+                    for role in started:
+                        self.assertTrue(started[role].wait(2), role)
+                    before = client.get(url).json()
+                    now.return_value = expired
+                    if get_first:
+                        self.assertEqual(client.get(url).json()["vehicles"][0]["availability"], "unknown")
+                    if hospital_deadline_passed:
+                        monotonic.return_value = 6.0
+                finally:
+                    finish.set()
+                result = self.wait_for_completion(client, url)
+                hospital = result["decisions"]["hospital"]
+                if hospital_deadline_passed:
+                    self.assertIsNone(hospital["choice"])
+                    self.assertEqual(hospital["status"], "WAIT")
+                    self.assertEqual(hospital["reason"], "모델 응답 시간이 초과되었습니다.")
+                else:
+                    self.assertEqual(hospital["choice"], "H2")
+                    self.assertIsNone(result["error"])
+                self.assertEqual(result["decisions"]["vehicle"]["status"], "WAIT")
+                self.assertEqual(result["decisions"]["vehicle"]["recommendation_revision"],
+                                 before["decisions"]["vehicle"]["recommendation_revision"])
+                self.assertEqual(result["vehicles"][0]["availability"], "unknown")
 
     def test_only_one_concurrent_dispatch_can_apply_a_viewed_recommendation(self):
         ready = self.event(self.create("reroute"))
@@ -251,6 +359,76 @@ class ConsoleFlow(unittest.TestCase):
                 self.assertIsNone(state["decisions"]["urgency"]["choice"])
                 self.assertEqual(state["decisions"]["urgency"]["evidence_turn_ids"], [])
                 self.assertEqual(state["decisions"]["vehicle"]["choice"], vehicle_choice)
+
+    def test_consecutive_hospital_failures_preserve_last_real_observation(self):
+        from backend.scenarios import get_frame
+
+        retry_states = iter(("cached", "timeout", "ok"))
+
+        def intermittently_unavailable(scenario_id, step, hospital_retry=False):
+            frame = get_frame(scenario_id, step, hospital_retry)
+            if scenario_id == "reroute" and step == 1:
+                frame["external_status"] = "cached"
+            if not hospital_retry:
+                return frame
+            status = next(retry_states)
+            if status == "cached":
+                frame["hospitals"] = [item for item in frame["hospitals"] if item["id"] != "H3"]
+            frame["external_status"] = status
+            return frame
+
+        with patch("backend.sessions.get_frame", intermittently_unavailable):
+            before = self.event(self.create("outage"))
+            expected = {
+                item["id"]: {"availability": item["availability"], "source_at": item["source_at"]}
+                for item in before["hospitals"] if item["source_at"] is not None
+            }
+            separate = self.event(self.create("reroute"))
+            self.assertEqual(separate["external_status"], "cached")
+            self.assertTrue(all(item.get("last_observation") is None for item in separate["hospitals"]))
+            state = self.event(before)
+            for expected_status in ("timeout", "cached", "timeout"):
+                self.assertEqual(state["external_status"], expected_status)
+                self.assertEqual(state["decisions"]["hospital"]["status"], "WAIT")
+                self.assertIsNone(state["decisions"]["hospital"]["choice"])
+                for row in state["hospitals"]:
+                    self.assertEqual(row["availability"], "unknown")
+                    self.assertIsNone(row["source_at"])
+                    self.assertEqual(row.get("last_observation"), expected.get(row["id"]))
+                state = self.event(state, "retry")
+            self.assertEqual(state["external_status"], "ok")
+            self.assertEqual(state["decisions"]["hospital"]["choice"], "H2")
+            for row in state["hospitals"]:
+                self.assertIsNone(row.get("last_observation"))
+                if row["id"] in expected:
+                    self.assertGreater(row["source_at"], expected[row["id"]]["source_at"])
+
+    def test_first_hospital_timeout_preserves_initial_observation(self):
+        from backend.scenarios import get_frame
+
+        source_at = "2026-11-19T14:00:00+09:00"
+
+        def initially_observed(scenario_id, step, hospital_retry=False):
+            frame = get_frame(scenario_id, step, hospital_retry)
+            frame["external_status"] = "ok" if step == 0 else "timeout"
+            if step == 0:
+                hospital = next(item for item in frame["hospitals"] if item["id"] == "H2")
+                hospital.update(availability="available", source_at=source_at)
+            return frame
+
+        with patch("backend.sessions.get_frame", initially_observed):
+            initial = self.create("outage")
+            hospital = next(item for item in initial["hospitals"] if item["id"] == "H2")
+            self.assertEqual(hospital["source_at"], source_at)
+            result = self.event(initial)
+            self.assertEqual(result["external_status"], "timeout")
+            self.assertEqual(result["decisions"]["hospital"]["status"], "WAIT")
+            hospital = next(item for item in result["hospitals"] if item["id"] == "H2")
+            self.assertEqual(hospital["availability"], "unknown")
+            self.assertIsNone(hospital["source_at"])
+            self.assertEqual(hospital.get("last_observation"), {
+                "availability": "available", "source_at": source_at,
+            })
 
     def test_staged_urgency_cites_clinical_assessment_and_survives_location_correction(self):
         state = self.create("staged")

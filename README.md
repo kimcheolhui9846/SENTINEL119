@@ -52,6 +52,8 @@ npm.cmd run build --prefix frontend
 
 백엔드 단위·HTTP 테스트는 `.\.venv\Scripts\python.exe -B -m unittest discover -v`로 실행합니다. 프론트 개발 서버는 `npm.cmd run dev --prefix frontend`로 시작하며 `/api`를 로컬 FastAPI에 전달합니다. 서버가 켜진 상태에서 Playwright MCP로 [데스크톱 관제 흐름](frontend/tests/console.browser.js)과 [차량 재확인·병원 정보 복구](frontend/tests/review.browser.js)를 검증할 수 있습니다.
 
+차량 만료와 병원 조회 연속 실패를 재현하려면 프론트 빌드 후 `.\.venv\Scripts\python.exe -m uvicorn tests.freshness_console:create_test_app --factory --host 127.0.0.1 --port 8024`로 테스트 서버를 실행합니다. [데스크톱 장애 회귀 검사](frontend/tests/freshness.browser.js)는 출동 거절 직후의 버튼 상태와 병원의 마지막 관측 시각을 확인합니다.
+
 ## 공용 판단 하네스
 
 Python 표준 라이브러리로 구현한 [판단 검증 모듈](decision_guard.py)은 합성 신고 시뮬레이션에서 Zoro 형식의 선택을 검증합니다. 모델 요청 전에 서버가 검토한 판단 근거, 위치 `(값, 근거 턴)`, 차량·병원 후보의 가용 상태를 `advance`에 전달하고 `begin`으로 요청 티켓을 발급합니다. 응답을 받으면 티켓과 함께 `apply`에 전달하고, 현재 판단은 `active`로 조회합니다. 시뮬레이션의 기본 응답 제한은 5초이며 `apply`에서 검사합니다. 네트워크 무응답은 호출부에서 처리합니다.
