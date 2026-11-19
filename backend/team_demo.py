@@ -9,7 +9,7 @@ import re
 import httpx
 
 from .api import create_app
-from .inference import _CALL_TIMEOUT, Inference, InferenceError, _json_request, _role_endpoint
+from .inference import _CALL_TIMEOUT, Inference, InferenceError, _json_request, _role_endpoint, sentinel_url
 
 
 _SPEAKERS = {"수보요원": 0, "신고자": 1}
@@ -126,7 +126,8 @@ async def _live_intake(state, criteria):
 
 class TeamDemoInference(Inference):
     def decide(self, mode, role, state, criteria, simulation_choices):
-        if mode != "live" or role != "intake":
+        # With SENTINEL_ZORO_URL the base adapter also returns subtype/symptom for the confidence rule.
+        if mode != "live" or role != "intake" or sentinel_url():
             return super().decide(mode, role, state, criteria, simulation_choices)
         if not criteria or not criteria.keys() <= _LABELS.keys():
             raise ValueError("questions must belong to the inference role")

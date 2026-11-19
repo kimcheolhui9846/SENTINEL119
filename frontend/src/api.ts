@@ -6,7 +6,7 @@ export type SessionEvent =
   | { action: 'text'; text: string }
   | DispatchEvent;
 
-export interface Scenario { id: string; title: string; summary: string; turn_count: number; live_only?: boolean; private?: boolean }
+export interface Scenario { id: string; title: string; summary: string; turn_count: number; live_only?: boolean; private?: boolean; area?: string | null }
 export interface HierarchyItem {
   question: string; parent: string; probabilities: Record<string, number>; threshold: number;
   status: 'WAIT' | 'COMMIT'; choice: string | null; turn: number | null;
@@ -15,6 +15,15 @@ export interface Candidate {
   id: string; name: string; availability: 'available' | 'unavailable' | 'unknown';
   eta_min: number | null; detail: string; source: string; source_at: string | null;
   last_observation?: { availability: Candidate['availability']; source_at: string } | null;
+  lat?: number; lon?: number; kind?: string;
+}
+export interface CallArea {
+  city: string; district: string; dong: string; code: string; precision: string; source: string;
+  center: { lat: number; lon: number }; geometry: GeoJSON.Geometry;
+}
+export interface Unit {
+  id: string; name: string; kind: 'ambulance' | 'fire' | 'rescue'; eta_min: number; distance_km: number;
+  detail: string; lat: number; lon: number;
 }
 export interface Decision {
   status: 'WAIT' | 'COMMIT' | 'OUT_OF_SCOPE'; choice: string | null; reason: string;
@@ -34,6 +43,7 @@ export interface Session {
   history: { id: number; turn_id: number; task: string; status: string; choice: string | null; reason: string }[];
   applied_vehicle: string | null; error: string | null;
   hierarchy?: Partial<Record<'subtype' | 'symptom', HierarchyItem>>;
+  area?: CallArea | null; units?: Unit[];
 }
 
 const messages: Record<string, string> = {

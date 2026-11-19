@@ -569,6 +569,7 @@ class SessionService:
             "processing": session.processing, "manual": session.manual, "turns": deepcopy(session.turns),
             "decisions": {task: self._decision_view(session, task) for task in _TASKS},
             "hierarchy": deepcopy(session.hierarchy) if session.mode == "live" else {},
+            "area": deepcopy(session.frame.get("area")), "units": deepcopy(session.frame.get("units", [])),
             "vehicles": deepcopy(session.frame["vehicles"]),
             "hospitals": deepcopy(session.frame["hospitals"]),
             "location": location[0] if location else None, "external_status": session.frame["external_status"],
