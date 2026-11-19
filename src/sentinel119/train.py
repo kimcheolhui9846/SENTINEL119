@@ -83,23 +83,46 @@ def filter_examples(examples, tokenizer, max_length):
                   "used_labels": counts, "missing_labels": missing}
 
 
+PRIMARY = ("dispatch", "urgency")
+
+
+def subtype_dispatch(keys, probabilities):
+    from .auxiliary import SUBTYPE_DISPATCH
+    totals = Counter()
+    for key, p in zip(keys, probabilities):
+        totals[SUBTYPE_DISPATCH[key]] += p
+    return max(totals, key=totals.get)
+
+
 def evaluate(model, examples, tokenizer, max_length, temperature=1.0):
     import torch
     from .model import supervised_loss
     actual, predicted, labels = {}, {}, {}
-    nll = []
+    nll, aux_nll, derived = [], [], []
     model.eval()
     with torch.no_grad():
         for example in examples:
             rows = encode(example, tokenizer, max_length)
             logits = tuple(z / temperature for z in model(rows))
-            nll.append(float(supervised_loss(logits, rows)))
+            # mean_nll stays dispatch+urgency only, so selection matches checkpoints without auxiliary questions.
+            main = [(z, r) for z, r in zip(logits, rows) if r["qid"] in PRIMARY]
+            aux = [(z, r) for z, r in zip(logits, rows) if r["qid"] not in PRIMARY]
+            nll.append(float(supervised_loss(*zip(*main))) if main else float(supervised_loss(logits, rows)))
+            if aux:
+                aux_nll.append(float(supervised_loss(*zip(*aux))))
             for row, z in zip(rows, logits):
                 name = row["qid"]
                 labels[name] = row["keys"]
                 actual.setdefault(name, []).append(row["keys"][row["label"]])
                 predicted.setdefault(name, []).append(row["keys"][int(z.argmax())])
+                if name == "subtype":
+                    derived.append(subtype_dispatch(row["keys"], torch.softmax(z.float(), -1).tolist()))
     result = {name: classification_metrics(actual[name], predicted[name], labels[name]) for name in labels}
+    if derived and "dispatch" in labels:
+        # Dispatch implied by summing subtype probabilities within each dispatch type.
+        result["dispatch_from_subtype"] = classification_metrics(actual["dispatch"], derived, labels["dispatch"])
+    if aux_nll:
+        result["auxiliary_mean_nll"] = sum(aux_nll) / len(aux_nll)
     severity = {"low": 0, "medium": 1, "high": 2}
     if "urgency" in actual:
         result["urgency"]["downward_error_rate"] = sum(
@@ -248,6 +271,9 @@ def parse_multipliers(text):
 
 def build_objective(args, train):
     objective = {"task_weights": {"dispatch": 1.0, "urgency": args.urgency_weight}}
+    for qid in train[0]["questions"]:
+        if qid not in PRIMARY:
+            objective["task_weights"][qid] = args.aux_weight
     if args.urgency_label_smoothing:
         objective["label_smoothing"] = {"urgency": args.urgency_label_smoothing}
     if args.urgency_cost_weight:
@@ -291,6 +317,8 @@ def main():
     parser.add_argument("--guideline-dir", type=Path,
                         help="External knowledge root containing extracted/chapters (not stored in this repo)")
     parser.add_argument("--urgency-weight", type=float, default=1.0)
+    parser.add_argument("--aux-weight", type=float, default=0.5,
+                        help="Loss weight of auxiliary questions (e.g. subtype, triage) present in the data")
     parser.add_argument("--urgency-label-smoothing", type=float, default=0.0)
     parser.add_argument("--urgency-cost-weight", type=float, default=0.0,
                         help="Weight of the expected asymmetric ordinal cost term")
@@ -308,7 +336,8 @@ def main():
         parser.error("Lengths, steps, accumulation and evaluation interval must be positive")
     if not 0 <= args.warmup_ratio < 1 or not 0 <= args.urgency_label_smoothing < 1:
         parser.error("Warmup ratio and label smoothing must be in [0, 1)")
-    if min(args.urgency_weight, args.downward_cost) <= 0 or args.urgency_cost_weight < 0 or args.dispatch_logit_adjust < 0:
+    if (min(args.urgency_weight, args.downward_cost) <= 0 or args.urgency_cost_weight < 0
+            or args.dispatch_logit_adjust < 0 or args.aux_weight < 0):
         parser.error("Loss weights and costs must be nonnegative (task weight and downward cost positive)")
     if args.head_learning_rate is not None and (not math.isfinite(args.head_learning_rate)
                                                 or args.head_learning_rate <= 0):
