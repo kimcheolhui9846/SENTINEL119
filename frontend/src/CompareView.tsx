@@ -106,7 +106,7 @@ function Chips({ dist, labels, commit, threshold, locked, picked }: {
   );
 }
 
-// 16 symptom options do not fit one screen: folded by default, the summary shows the commit or the leader.
+// 15 symptom options do not fit one screen: folded by default, the summary shows the commit or the leader.
 function SymptomFold({ dist, labels, commit }: { dist: Record<string, number>; labels: Record<string, string>; commit?: Commit }) {
   const best = top(dist);
   return (
