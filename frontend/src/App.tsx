@@ -1,15 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent, KeyboardEvent, MouseEvent } from 'react';
 import type { DispatchEvent, Mode, Session } from './api';
 import { HospitalMap } from './HospitalMap';
 import { DrillPanel } from './DrillPanel';
 import { CandidatePanel, candidateName, DecisionsPanel, HistoryPanel } from './panels';
 import { useConsole } from './useConsole';
+import CompareView from './CompareView';
+import { api as compareApi } from './compareApi';
+import type { CompareScenario } from './compareApi';
 import './styles.css';
 
-const pages = ['workspace', 'history', 'drill'] as const;
+const pages = ['workspace', 'history', 'drill', 'compare'] as const;
 type Page = typeof pages[number];
-const pageNames = { workspace: '관제 화면', history: '판단 이력', drill: '자동 모의훈련' };
+const pageNames = { workspace: '관제 화면', history: '판단 이력', drill: '자동 모의훈련', compare: '모델 비교' };
 
 function Transcript({ session }: { session: Session }) {
   if (!session.turns.length) {
@@ -60,6 +63,8 @@ export default function App() {
   const [page, setPage] = useState<Page>(window.location.hash === '#drill' ? 'drill' : 'workspace');
   const [drillOpened, setDrillOpened] = useState(page === 'drill');
   const [draft, setDraft] = useState('');
+  const [compareCalls, setCompareCalls] = useState<CompareScenario[]>([]);
+  useEffect(() => { compareApi.scenarios().then(setCompareCalls).catch(() => setCompareCalls([])); }, []);
   const selected = scenarios.find((item) => item.id === scenarioId);
   const modeLabel = mode === 'live' ? '실시간 Zoro' : '시뮬레이션';
   const showRetry = !!problem?.recovery || canRetry;
@@ -122,11 +127,11 @@ export default function App() {
             ))}
           </div>
         </nav>
-        {page !== 'drill' && <span className="mode-indicator" data-mode={mode}>{modeLabel}</span>}
+        {page !== 'drill' && page !== 'compare' && <span className="mode-indicator" data-mode={mode}>{modeLabel}</span>}
       </header>
 
       <main className="main">
-        {page !== 'drill' && <>
+        {page !== 'drill' && page !== 'compare' && <>
         <header className="page-heading">
           <h1 className="workspace-title">신고 관제</h1>
           <p className="location-field" data-known={session?.location ? 'true' : 'false'}>
@@ -228,6 +233,10 @@ export default function App() {
               <HospitalMap />
             </div>
           )}
+        </div>
+        <div id="page-compare" role="tabpanel" aria-labelledby="tab-compare" hidden={page !== 'compare'}>
+          {page === 'compare' && (compareCalls.length ? <CompareView scenarios={compareCalls} />
+            : <p className="empty-state">비교할 통화가 없습니다. SENTINEL_SCENARIO_DIRS를 설정하세요.</p>)}
         </div>
         <div id="page-history" role="tabpanel" aria-labelledby="tab-history" hidden={page !== 'history'}>
           {page === 'history' && (session ? <HistoryPanel session={session} /> : <p className="empty-state">신고를 열면 판단 이력을 확인할 수 있습니다.</p>)}
