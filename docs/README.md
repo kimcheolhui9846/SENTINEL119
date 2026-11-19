@@ -6,6 +6,7 @@
 
 | 문서 | 내용 |
 | --- | --- |
+| [수보 판단·배차 제안 비교](handoffs/shadow-intake.md) | 같은 H1b 응답으로 기존 판단과 새 하네스의 턴별 확정·보류를 재생하는 방법 |
 | [프로젝트 명세](spec.md) | 확정 범위, 상태 계약, 데이터·SFT·PPO 계획, 완료 조건, 두 사람의 일정과 역할 |
 | [개발·리뷰·브랜치 규칙](development.md) | dev 기반 기능 개발, 통합·팀원 리뷰, 검증 후 main 반영 |
 | [SENTINEL_ZORO 모델 구조와 학습](model.md) | 판단 head 구조, H1b→H3→H4 학습 순서, 가중 손실, 턴 단위 WAIT/COMMIT과 임계값 |
