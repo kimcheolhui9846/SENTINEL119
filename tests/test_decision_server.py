@@ -111,6 +111,28 @@ class DecisionServerTests(unittest.TestCase):
         self.assertEqual(set(ask(full)[0]), {"dispatch", "urgency", "ems_subtype", "rescue_subtype", "ems_symptom"})
         self.assertEqual(len(ask(Stub(None))[0]), 5)
 
+    def test_reason_rescores_only_finished_reasoning(self):
+        class FakeReasoner:
+            def __init__(self, finished):
+                self.finished = finished
+
+            def think(self, state, question, max_new_tokens):
+                return "B가 필요한 처치를 모두 한다.", 12.0, 20, self.finished
+
+        body = {"turns": [{"speaker": 1, "text": "임산부인데 피가 나요"}],
+                "question": {"instructions": "병원을 고르세요.", "criteria": {"A": "가", "B": "나"}}}
+        done = TestClient(self.server.create_app(FakeDecider(), reasoner=FakeReasoner(True))).post("/v1/reason", json=body).json()
+        self.assertEqual(set(done["reasoned"]), {"A", "B"})
+        self.assertTrue(done["reasoning_finished"])
+        cut = TestClient(self.server.create_app(FakeDecider(), reasoner=FakeReasoner(False))).post("/v1/reason", json=body).json()
+        self.assertIsNone(cut["reasoned"])
+        self.assertEqual(set(cut["direct"]), {"A", "B"})
+
+    def test_systemone_rejects_reasoning_flag(self):
+        body = {"model": "zoro-base", "state": "x", "reasoning": True,
+                "questions": {"q": {"type": "choice", "criteria": {"a": "a"}}}}
+        self.assertEqual(self.client.post("/v1/systemone", json=body).status_code, 501)
+
     def test_llm_parser_maps_labels_and_flags_invalid_values(self):
         labels = self.server.stream_labels()
         answer = self.server.parse_llm('답: {"출동유형": "구급", "세부유형": "심정지", "긴급도": "최상"}', labels)

@@ -349,6 +349,8 @@ python -m sentinel119.train --data data/processed/aihub119-hier-8k --checkpoint 
 | `POST /v1/llm` | `--llm`으로 올린 일반 LLM이 같은 대화를 보고 JSON으로 답한다. 선택지 밖 값은 `invalid`로 표시한다. |
 | `GET /v1/models`, `POST /v1/systemone` | 콘솔 호환 경로. 모델 ID는 `sentinel-zoro`(sft)와 `zoro-base`. 상태의 `turns`(`수보요원`/`신고자`)를 학습 형식으로 바꾸고, 출동유형·긴급도는 학습 질문으로 판단한 뒤 콘솔의 한글 라벨로 돌려준다. 그 밖의 선택 질문(차량·병원 등)은 주어진 상태와 선택지로 판단한다. 확률은 합이 1이 되도록 다시 정규화한다. |
 | `POST /v1/classify`, `POST /v1/choose`, `GET /v1/health` | 출동유형·긴급도 단건 판단, 후보 선택(원본 head), 모델 식별 정보. |
+| `POST /v1/reason` (실험, `--reasoning`) | Zoro-1 reasoned action. 같은 질문에 대해 모델이 먼저 `<think>` 추론을 쓰고, 그 글을 상태에 붙여 원본 head가 다시 채점한다. 공식 `zoro_decide.py` 형식을 따르되 지시문에 간결·한국어 두 문장을 덧붙였다. 토큰 한도로 끊긴 추론은 `reasoning_finished=false`로 표시하고 재채점하지 않는다. `--reasoning`은 생성용 가중치를 시작할 때 한 번 더 올린다(GPU 약 9GB 추가). 데모 기본 경로에서는 쓰지 않는다. |
 
 - 응답의 `model.checkpoint`(경로, 모드, 파일 sha256, `max_length`)는 데모의 모델 고정 식별자 계산에 쓰인다. 체크포인트를 바꾸면 데모 쪽 고정 식별자도 함께 갱신해야 한다.
+- 확률은 보정하지 않은 softmax(T = 1)다. 공개 Zoro-1은 보정 온도 1.59를 함께 배포하지만, 학습·평가와 데모 임계값 조정이 모두 T = 1 기준이므로 그대로 쓴다.
 - 턴 단위 WAIT/COMMIT 임계값은 서버가 아니라 데모가 적용한다. 현재 값(출동유형 0.90, 세부유형·긴급도 0.85, 주증상 0.80)은 E1 dev 63통화 기준이며 최종 체크포인트로 다시 정한다.
