@@ -1,12 +1,15 @@
 import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as L from 'leaflet';
-import { api } from './compareApi';
+import { ApiError, api } from './compareApi';
 import type { CompareScenario, ScenarioDetail } from './compareApi';
-import { advance, DISPATCH_THRESHOLD, emptyZoro, SUBTYPE_THRESHOLD, THRESHOLD } from './CompareView';
-import type { Labels, ZoroState } from './CompareView';
+import type { Labels } from './CompareView';
+import { advanceHarness, canAct, emptyZoro, harnessThreshold, SUBTYPE_OF, suspendHarness, transferEvidence } from './demoHarness';
+import type { Commit, ZoroState } from './demoHarness';
+import { advanceTransfer, emptyTransfer } from './demoTransfer';
+import type { TransferEvent, Transport } from './demoTransfer';
 import { dispatchApi } from './dispatchApi';
-import type { Assignment, FleetUnit, Patrol, Point, TransferHospital, TransferResponse } from './dispatchApi';
+import type { Assignment, CallArea, FleetUnit, Patrol, Point, TransferHospital, TransferResponse } from './dispatchApi';
 import 'leaflet/dist/leaflet.css';
 import './drill.css';
 import './dispatch.css';
@@ -52,8 +55,8 @@ function positionAt(m: Moving, now: number, loop = false) {
 }
 
 interface Line { speaker: 0 | 1; text: string; note?: string; base?: string; ms?: number }
+type Turn = Pick<Line, 'speaker' | 'text'>;
 // The ambulance that carries the patient: it reaches the scene, treats briefly, then drives to the hospital.
-interface Transport { unitId: string; hospital: TransferHospital; startedAt: number }
 const SCENE_TREAT_MS = 2500;
 const animMs = (durationS: number) => Math.max(5000, (durationS * 1000) / TIME_SCALE);
 interface Order extends Assignment { turn: number; dispatchedAt: number }
@@ -205,11 +208,11 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfe
   // Each new order draws its road route and drives the unit along it.
   useEffect(() => {
     const s = state.current;
-    if (!s || !area) return;
+    if (!s) return;
     s.routes.clearLayers();
-    const bounds = L.latLngBounds([latLng(area.center)]);
+    const bounds = area ? L.latLngBounds([latLng(area.center)]) : null;
     for (const order of orders) {
-      if (!order.unit || !order.route) continue;
+      if (!bounds || !order.unit || !order.route) continue;
       if (transport?.unitId === order.unit.id) continue;  // its scene route is done; the transport line replaces it
       const path = order.route.path.map(latLng);
       L.polyline(path, { color: '#ffffff', weight: 8, opacity: 0.8, interactive: false }).addTo(s.routes);
@@ -235,26 +238,35 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfe
         }
       }
     }
-    if (orders.length && !camera.current.follow) s.map.flyToBounds(bounds, { padding: [50, 50], maxZoom: 15.5, duration: 1.0 });
-    else if (orders.length) s.map.setZoom(Math.max(s.map.getZoom(), 15));
+    if (bounds && orders.length && !camera.current.follow) s.map.flyToBounds(bounds, { padding: [50, 50], maxZoom: 15.5, duration: 1.0 });
+    else if (bounds && orders.length) s.map.setZoom(Math.max(s.map.getZoom(), 15));
   }, [orders, area, fleet, positions, transport]);
 
   // Transport: the carrying ambulance leaves the scene along the road route to the chosen hospital.
-  const transportLayer = useRef<L.LayerGroup | null>(null);
+  const transportLayer = useRef<{ group: L.LayerGroup; unitId: string } | null>(null);
   useEffect(() => {
     const s = state.current;
     if (!s) return;
-    transportLayer.current?.remove();
+    const previous = transportLayer.current;
+    previous?.group.remove();
     transportLayer.current = null;
-    if (!transport) return;
+    if (!transport) {
+      if (previous) {
+        const order = orders.find((o) => o.unit?.id === previous.unitId);
+        s.moving.delete(previous.unitId);
+        if (order?.route) s.moving.set(previous.unitId, moving(
+          previous.unitId, order.route.path, order.route.duration_s, order.dispatchedAt));
+      }
+      return;
+    }
     const path = transport.hospital.route.path.map(latLng);
     const group = L.layerGroup().addTo(s.map);
     L.polyline(path, { color: '#ffffff', weight: 9, opacity: 0.85, interactive: false }).addTo(group);
     L.polyline(path, { color: '#185c91', weight: 5, opacity: 1, interactive: false }).addTo(group);
-    transportLayer.current = group;
+    transportLayer.current = { group, unitId: transport.unitId };
     s.moving.set(transport.unitId, moving(transport.unitId, transport.hospital.route.path,
       transport.hospital.route.duration_s, transport.startedAt));
-  }, [transport]);
+  }, [transport, orders]);
 
   return (
     <div className="dispatch-map-wrap">
@@ -395,22 +407,30 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   const [now, setNow] = useState(performance.now());
   const [patrols, setPatrols] = useState<Patrol[]>([]);
   const [labels, setLabels] = useState<Labels | null>(null);
-  const [transfer, setTransfer] = useState<TransferResponse | null>(null);
-  // Main symptom the transfer rule used: committed, or the current top estimate while it is still WAIT.
-  const [transferSymptom, setTransferSymptom] = useState<{ label: string; p: number; committed: boolean } | null>(null);
-  const transferKey = useRef('');
-  const transferSeq = useRef(0);
+  const [hospitalPlan, setHospitalPlan] = useState(emptyTransfer);
   const [openHospitals, setOpenHospitals] = useState<string[]>([]);
-  const [transport, setTransport] = useState<Transport | null>(null);
+  const hospitalPlanRef = useRef(hospitalPlan);
+  const transfer = hospitalPlan.suggestion?.response ?? null;
+  const transferBasis = hospitalPlan.suggestion?.basis;
+  const transport = hospitalPlan.issued;
+  const updateTransfer = useCallback((event: TransferEvent) => {
+    const previous = hospitalPlanRef.current;
+    const next = advanceTransfer(previous, event);
+    if (next !== previous) {
+      hospitalPlanRef.current = next;
+      setHospitalPlan(next);
+    }
+    return next;
+  }, []);
   const [follow, setFollow] = useState(true);
-  const lastTransfer = useRef<Parameters<typeof dispatchApi.transfer>[0] | null>(null);
   const positions = useRef<Record<string, Point>>({});
   const run = useRef(0);
+  const inFlight = useRef(false);
+  const pendingReply = useRef<Turn | null>(null);
   const sentKey = useRef('');
   const zoro = useRef({ sft, base });
-  zoro.current = { sft, base };
   const ordersRef = useRef(orders);
-  ordersRef.current = orders;
+  useEffect(() => () => { run.current += 1; }, []);
 
   useEffect(() => {
     dispatchApi.fleet().then((f) => setFleet(f.units)).catch(() => setError('소방관서 자료를 불러오지 못했습니다.'));
@@ -419,147 +439,176 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   useEffect(() => { const id = window.setInterval(() => setNow(performance.now()), 500); return () => window.clearInterval(id); }, []);
 
   const reset = useCallback(() => {
-    run.current += 1; sentKey.current = ''; transferKey.current = ''; setTransfer(null); setTransferSymptom(null);
-    lastTransfer.current = null; setTransport(null); setOpenHospitals([]);
+    run.current += 1; inFlight.current = false;
+    sentKey.current = ''; updateTransfer({ type: 'reset' });
+    setOpenHospitals([]);
+    pendingReply.current = null;
     asked.current = new Set();
-    setPlaying(false); setBusy(false); setLines([]); setSft(emptyZoro()); setBase(emptyZoro()); setOrders([]);
-    setError(null); setShowGold(false);
-  }, []);
+    zoro.current = { sft: emptyZoro(), base: emptyZoro() };
+    ordersRef.current = [];
+    setPlaying(false); setBusy(false); setLines([]); setSft(zoro.current.sft); setBase(zoro.current.base); setOrders([]);
+    setError(null); setShowGold(false); setLabels(null); setDraft('');
+  }, [updateTransfer]);
   useEffect(() => {
     if (!callId || live) return;
     reset();
-    api.scenario(callId).then(setCall).catch(() => setError('통화를 불러오지 못했습니다.'));
+    setCall(null);
+    let current = true;
+    api.scenario(callId).then((data) => { if (current) setCall(data); })
+      .catch(() => { if (current) setError('통화를 불러오지 못했습니다.'); });
+    return () => { current = false; };
   }, [callId, reset]);
 
   // Dispatch when the type commits; subtype / urgency / symptom commits may add units (e.g. 심정지 → 펌뷸런스).
-  const syncDispatch = useCallback(async (state: ZoroState, turn: number) => {
+  const syncDispatch = useCallback(async (state: ZoroState, turn: number, area: CallArea, myRun: number) => {
     const c = state.commits;
-    if (!c.dispatch || !call?.area) return;
+    if (myRun !== run.current || !canAct(zoro.current.sft) || !c.dispatch) return;
     const key = [c.dispatch.label, c.subtype?.label, c.symptom?.label, c.urgency?.label].join('|');
     if (key === sentKey.current) return;
     sentKey.current = key;
-    const myRun = run.current;
     const current = ordersRef.current;
-    let res;
     try {
-      res = await dispatchApi.dispatch({
-        ...call.area.center, dispatch: c.dispatch.label, subtype: c.subtype?.label, symptom: c.symptom?.label,
+      const res = await dispatchApi.dispatch({
+        ...area.center, dispatch: c.dispatch.label, subtype: c.subtype?.label, symptom: c.symptom?.label,
         urgency: c.urgency?.label, busy: current.flatMap((o) => (o.unit ? [o.unit.id] : [])), skip: current.length,
         positions: { ...positions.current },
       });
+      if (myRun !== run.current || !canAct(zoro.current.sft)) return;
+      const at = performance.now();
+      ordersRef.current = [...ordersRef.current, ...res.assignments.map((a) => ({ ...a, turn, dispatchedAt: at }))];
+      setOrders(ordersRef.current);
     } catch {
       // Not a model failure: keep playing and retry the dispatch on the next turn.
       if (myRun === run.current) { sentKey.current = ''; setError('출동 배차 계산에 실패했습니다. 다음 턴에 다시 시도합니다.'); }
       return;
     }
-    if (myRun !== run.current) return;
-    const at = performance.now();
-    setOrders((prev) => [
-      ...prev.map((o, i) => ({ ...o, ...(res.plan[i] ? { role: res.plan[i].role, reason: res.plan[i].reason, source: res.plan[i].source } : {}) })),
-      ...res.assignments.map((a) => ({ ...a, turn, dispatchedAt: at })),
-    ]);
-  }, [call]);
+  }, []);
 
-  // EMS only: as soon as 구급 is committed, pick the transfer hospital (KB rule + NMC live data + Zoro choice).
-  // The main symptom chooses the rule; until it commits, its current top estimate is used and refreshed.
-  const syncTransfer = useCallback(async (state: ZoroState, turns: { speaker: 0 | 1; text: string }[], labels: Labels) => {
-    const c = state.commits;
-    if (c.dispatch?.label !== '구급' || !call?.area) return;
-    const dist = state.probs?.ems_symptom;
-    const top = dist ? Object.entries(dist).sort((a, b) => b[1] - a[1])[0] : undefined;
-    const symptom = c.symptom ? { label: c.symptom.label, p: c.symptom.p, committed: true }
-      : top ? { label: labels.ems_symptom?.[top[0]] ?? top[0], p: top[1], committed: false } : null;
-    const key = [c.subtype?.label, symptom?.label, symptom?.committed, c.urgency?.label].join('|');
-    if (key === transferKey.current) return;
-    transferKey.current = key;
-    const myRun = run.current;
-    const seq = ++transferSeq.current;  // only the latest request may update the recommendation
+  // Only committed EMS evidence may request a transport hospital or a symptom-specific rule.
+  const syncTransfer = useCallback(async (state: ZoroState, turns: Turn[], area: CallArea, myRun: number) => {
+    const evidence = transferEvidence(state);
+    if (myRun !== run.current || !canAct(zoro.current.sft) || !evidence) return;
+    const previous = hospitalPlanRef.current;
+    const pending = updateTransfer({ type: 'request', key: JSON.stringify(evidence) });
+    if (pending === previous) return;
     try {
-      const request = { ...call.area.center, turns, subtype: c.subtype?.label, symptom: symptom?.label,
-        urgency: c.urgency?.label };
-      lastTransfer.current = request;
-      const res = await dispatchApi.transfer(request);
-      if (myRun !== run.current || seq !== transferSeq.current) return;
-      setTransfer(res); setTransferSymptom(symptom);
-      if (res.status === 'unavailable' && transferKey.current === key) transferKey.current = '';  // retry next turn
+      const request = { ...area.center, turns, ...evidence };
+      const response = await dispatchApi.transfer(request);
+      if (myRun !== run.current || !canAct(zoro.current.sft)) return;
+      updateTransfer({ type: 'receive', generation: pending.generation, suggestion: { response, basis: evidence } });
     } catch {
-      if (myRun === run.current && seq === transferSeq.current) transferKey.current = '';  // retry next turn
+      if (myRun === run.current) updateTransfer({ type: 'receive', generation: pending.generation, suggestion: null });
     }
-  }, [call]);
+  }, [updateTransfer]);
 
-  // One turn: append it, let both Zoro heads judge the whole prefix, then dispatch / transfer as needed.
-  const judge = useCallback(async (turns: { speaker: 0 | 1; text: string }[]) => {
-    const myRun = run.current;
-    setLines((l) => [...l, { ...turns[turns.length - 1] }]);
+  const stopResourceActions = useCallback(() => {
+    updateTransfer({ type: 'block' });
+  }, [updateTransfer]);
+
+  const judge = useCallback(async (turns: Turn[], area: CallArea | null, myRun: number) => {
+    const turn = turns.length;
+    if (myRun !== run.current || turn !== zoro.current.sft.turn + 1) return null;
+    const utterance = turns[turn - 1];
     try {
       const res = await api.streamDecide(turns);
       if (myRun !== run.current) return null;
+      const source = { number: turn, speaker: utterance.speaker };
+      const s = advanceHarness(zoro.current.sft, res.results.sft.probabilities, source, res.harness, 'sft');
+      const b = advanceHarness(zoro.current.base, res.results.base.probabilities, source, res.harness, 'base');
+      if (!s.accepted || !b.accepted) throw new ApiError(!s.accepted ? s.note : b.note);
+      const nextSft = { ...s.next, latencies: [...s.next.latencies, res.results.sft.latency_ms] };
+      const nextBase = { ...b.next, latencies: [...b.next.latencies, res.results.base.latency_ms] };
+      zoro.current = { sft: nextSft, base: nextBase };
       setLabels(res.labels);
-      const s = advance(zoro.current.sft, res.results.sft.probabilities, turns.length, res.labels);
-      const b = advance(zoro.current.base, res.results.base.probabilities, turns.length, res.labels);
-      const nextSft = { ...s.next, latencies: [...zoro.current.sft.latencies, res.results.sft.latency_ms] };
-      setSft(nextSft);
-      setBase({ ...b.next, latencies: [...zoro.current.base.latencies, res.results.base.latency_ms] });
-      setLines((l) => l.map((line, i) => (i === turns.length - 1
-        ? { ...line, note: s.note, base: b.note, ms: res.results.sft.latency_ms } : line)));
-      zoro.current = { ...zoro.current, sft: nextSft };
-      await syncDispatch(nextSft, turns.length);
-      void syncTransfer(nextSft, turns, res.labels);
+      setSft(nextSft); setBase(nextBase);
+      setLines((l) => [...l, { ...utterance, note: s.note, base: b.note, ms: res.results.sft.latency_ms }]);
+      if (nextSft.reviewTurn !== null) {
+        stopResourceActions();
+      } else if (area && utterance.speaker === 1 && nextSft.gate === 'allow' && canAct(nextSft)) {
+        await syncDispatch(nextSft, turn, area, myRun);
+        if (myRun === run.current) void syncTransfer(nextSft, turns, area, myRun);
+      }
       return nextSft;
-    } catch {
-      if (myRun === run.current) { setError('모델 서버 응답이 없습니다. 연결을 확인하세요.'); setPlaying(false); }
+    } catch (e) {
+      if (myRun !== run.current) return null;
+      zoro.current = { sft: suspendHarness(zoro.current.sft), base: suspendHarness(zoro.current.base) };
+      setSft(zoro.current.sft); setBase(zoro.current.base);
+      stopResourceActions();
+      const message = e instanceof ApiError ? e.message : '모델 응답을 확인할 수 없습니다.';
+      setError(message.startsWith('WAIT') ? message : `WAIT · ${turn}턴 ${message} 같은 턴을 다시 시도할 수 있습니다.`);
+      setPlaying(false);
       return null;
     }
-  }, [syncDispatch, syncTransfer]);
+  }, [stopResourceActions, syncDispatch, syncTransfer]);
 
   const step = useCallback(async () => {
-    if (!call || busy || lines.length >= call.turns.length) return;
+    if (!call || inFlight.current || lines.length >= call.turns.length) return;
     const myRun = run.current;
+    inFlight.current = true;
     setBusy(true); setError(null);
-    await judge([...lines.map(({ speaker, text }) => ({ speaker, text })), call.turns[lines.length]]);
-    if (myRun === run.current) setBusy(false);
-  }, [call, busy, lines, judge]);
+    await judge([...lines.map(({ speaker, text }) => ({ speaker, text })), call.turns[lines.length]], call.area ?? null, myRun);
+    if (myRun === run.current) { inFlight.current = false; setBusy(false); }
+  }, [call, lines, judge]);
 
   // Free input: pick a point on the map (before the first caller message), then talk as the caller.
   const pickPoint = useCallback(async (p: Point) => {
-    if (!live || lines.some((l) => l.speaker === 1)) return;
+    if (!live || inFlight.current || lines.some((l) => l.speaker === 1)) return;
+    let myRun = run.current;
+    inFlight.current = true; setBusy(true); setError(null);
     try {
       const area = await dispatchApi.locate(p);
+      if (myRun !== run.current) return;
       reset();
+      myRun = run.current;
+      inFlight.current = true; setBusy(true);
       setCall({ id: 'live', title: '직접 입력', summary: '', private: false, gold: null, turns: [], area });
-      setBusy(true);
-      await judge([{ speaker: 0, text: DISPATCHER_GREETING }]);
-      setBusy(false);
+      pendingReply.current = { speaker: 0, text: DISPATCHER_GREETING };
+      if (await judge([pendingReply.current], area, myRun) && myRun === run.current) pendingReply.current = null;
     } catch {
-      setError('서울 안의 지점을 선택하세요.');
+      if (myRun === run.current) setError('서울 안의 지점을 선택하세요.');
+    } finally {
+      if (myRun === run.current) { inFlight.current = false; setBusy(false); }
     }
   }, [live, lines, reset, judge]);
 
   const send = useCallback(async () => {
     const text = draft.trim();
-    if (!live || !call?.area || busy || !text) return;
+    if (!live || !call?.area || inFlight.current || (!text && !pendingReply.current)) return;
     const myRun = run.current;
-    setDraft(''); setBusy(true); setError(null);
-    const history = lines.map(({ speaker, text: t }) => ({ speaker, text: t }));
-    const afterCaller = await judge([...history, { speaker: 1, text }]);
-    if (afterCaller && myRun === run.current) {
+    const area = call.area;
+    inFlight.current = true; setBusy(true); setError(null);
+    try {
+      const history = lines.map(({ speaker, text: lineText }) => ({ speaker, text: lineText }));
+      if (pendingReply.current) {
+        if (await judge([...history, pendingReply.current], area, myRun) && myRun === run.current) pendingReply.current = null;
+        return;
+      }
+      const caller = { speaker: 1 as const, text };
+      const afterCaller = await judge([...history, caller], area, myRun);
+      if (!afterCaller || myRun !== run.current) return;
+      setDraft('');
       await new Promise((r) => setTimeout(r, 500));
-      await judge([...history, { speaker: 1, text }, { speaker: 0, text: dispatcherReply(afterCaller.commits, asked.current, call.area.dong) }]);
+      if (myRun !== run.current) return;
+      const reply = afterCaller.reviewTurn !== null ? '신고 내용을 다시 확인하겠습니다.'
+        : dispatcherReply(afterCaller.commits, asked.current, area.dong);
+      pendingReply.current = { speaker: 0, text: reply };
+      if (await judge([...history, caller, pendingReply.current], area, myRun) && myRun === run.current) pendingReply.current = null;
+    } finally {
+      if (myRun === run.current) { inFlight.current = false; setBusy(false); }
     }
-    if (myRun === run.current) setBusy(false);
-  }, [live, call, busy, draft, lines, judge]);
+  }, [live, call, draft, lines, judge]);
 
   const done = !live && !!call && lines.length >= call.turns.length && !busy;
 
   // The first ambulance carries the patient: once it reaches the scene and a hospital is chosen, it transports.
   const carrier = orders.find((o) => o.kind === 'ambulance' && o.unit && o.route) ?? null;
-  const chosenHospital = transfer?.status === 'ok' ? transfer.hospitals.find((h) => h.hpid === transfer.zoro?.choice) ?? null : null;
   useEffect(() => {
-    if (transport || !carrier?.route || !carrier.unit || !chosenHospital) return;
+    if (inFlight.current || !carrier?.route || !carrier.unit || !hospitalPlan.suggestion || transport) return;
     const arrival = carrier.dispatchedAt + animMs(carrier.route.duration_s);
     if (now < arrival) return;
-    setTransport({ unitId: carrier.unit.id, hospital: chosenHospital, startedAt: Math.max(now, arrival) + SCENE_TREAT_MS });
-  }, [now, transport, carrier, chosenHospital]);
+    updateTransfer({ type: 'issue', authorized: canAct(zoro.current.sft),
+      unitId: carrier.unit.id, startedAt: now + SCENE_TREAT_MS });
+  }, [busy, now, transport, carrier, hospitalPlan.suggestion, updateTransfer]);
   const focusId = transport?.unitId ?? carrier?.unit?.id ?? orders.find((o) => o.unit)?.unit?.id ?? null;
 
 
@@ -580,20 +629,23 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
 
   const c = sft.commits;
   const probs = sft.probs;
-  const subQ = c.dispatch ? ({ ems: 'ems_subtype', rescue: 'rescue_subtype' } as Record<string, string>)[c.dispatch.key] : undefined;
-  const baseFinal = [base.commits.dispatch?.label, base.commits.subtype?.label, base.commits.urgency?.label].map((x) => x ?? '—').join(' · ');
+  const subQ = c.dispatch ? SUBTYPE_OF[c.dispatch.key] : undefined;
+  const baseFinal = base.reviewTurn !== null ? `재검토 (${base.reviewTurn}턴)`
+    : [base.commits.dispatch?.label, base.commits.subtype?.label, base.commits.urgency?.label].map((x) => x ?? '—').join(' · ');
   const gold = call?.gold;
   const last = lines.at(-1);
   const pct = (x: number) => `${Math.round(x * 100)}%`;
   const dist = (qid: string) => probs?.[qid as keyof NonNullable<typeof probs>] as Record<string, number> | undefined;
-  const need = (qid: string, key: string) => qid === 'dispatch' ? DISPATCH_THRESHOLD[key] ?? THRESHOLD.dispatch
-    : qid === 'urgency' ? THRESHOLD.urgency : qid === 'ems_symptom' ? THRESHOLD.symptom : SUBTYPE_THRESHOLD[qid] ?? THRESHOLD.subtype;
+  const need = (qid: string, key: string) => harnessThreshold(sft.profile, qid, key);
 
   // Banner: what the model decided on the latest turn, in one line.
   let banner: { state: 'wait' | 'commit' | 'idle'; title: string; detail: React.ReactNode };
-  if (!last) banner = { state: 'idle', title: '통화 대기', detail: '재생을 누르면 신고 통화가 한 턴씩 들어옵니다.' };
+  if (sft.reviewTurn !== null) banner = { state: 'wait', title: '재검토 · 추가 지령 보류',
+    detail: `${sft.reviewTurn}턴부터 새 출동·이송 판단을 보류합니다.` };
+  else if (sft.blocked) banner = { state: 'wait', title: '판단 보류', detail: `${sft.turn + 1}턴 응답을 다시 확인해야 합니다.` };
+  else if (!last) banner = { state: 'idle', title: '통화 대기', detail: '재생을 누르면 신고 통화가 한 턴씩 들어옵니다.' };
   else if (!last.note) banner = { state: 'idle', title: '판단 중', detail: `${lines.length}턴까지의 대화를 읽고 있습니다.` };
-  else if (last.note !== 'WAIT') {
+  else if (last.note.startsWith('COMMIT')) {
     const sent = orders.filter((o) => o.turn === lines.length && o.unit);
     banner = { state: 'commit', title: last.note.replace('COMMIT · ', ''),
       detail: sent.length ? <>→ <b className="hl-unit">{sent.map((o) => o.unit?.name).join(', ')}</b> 출동</>
@@ -603,16 +655,17 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
       : !c.urgency ? ['urgency', '긴급도'] : null;
     const d = open ? dist(open[0]) : undefined;
     const best = d ? Object.entries(d).sort((a, b) => b[1] - a[1])[0] : undefined;
+    const threshold = open && best ? need(open[0], best[0]) : undefined;
     banner = { state: 'wait', title: '더 듣기',
       detail: open && best && labels ? (
         <>
-          <span className="hl-task">{open[1]}</span> 1순위 <b className="hl-label">{labels[open[0]]?.[best[0]] ?? best[0]}</b>{' '}
-          <b className="hl-prob">{pct(best[1])}</b> <span className="hl-sep">·</span> 확정 기준 <b className="hl-need">{pct(need(open[0], best[0]))}</b> 미만
+          <span className="hl-task">{open[1]}</span> 모델 추정 <b className="hl-label">{labels[open[0]]?.[best[0]] ?? best[0]}</b>{' '}
+          <b className="hl-prob">{pct(best[1])}</b>{threshold !== undefined ? <> · 정책 기준 {pct(threshold)}</> : null}
         </>
-      ) : '추가로 확정할 항목 없이 다음 발화를 기다립니다.' };
+      ) : `${lines.length}턴의 추가 근거를 기다립니다.` };
   }
 
-  const bars = (qid: string, title: string, commit?: { key: string; turn: number }) => {
+  const bars = (qid: string, title: string, commit?: Commit) => {
     const d = dist(qid);
     if (!d || !labels?.[qid]) return null;
     const rows = Object.entries(d).sort((a, b) => b[1] - a[1]).slice(0, 4);
@@ -620,8 +673,8 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
       return (
         <div className="prob-block is-folded" data-state="commit">
           <span className="pf-name">{title}</span>
-          <strong className="pf-value">{labels[qid][commit.key] ?? commit.key}</strong>
-          <span className="pf-meta tabular">{pct(d[commit.key] ?? 0)} · {commit.turn}턴</span>
+          <strong className="pf-value">{commit.label}</strong>
+          <span className="pf-meta tabular">{pct(commit.p)} · {commit.turn}턴</span>
         </div>
       );
     }
@@ -629,14 +682,17 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
       <div className="prob-block" data-state="wait">
         <div className="prob-head"><span>{title}</span>
           <strong>WAIT</strong></div>
-        {rows.map(([key, p]) => (
-          <div key={key} className="prob-row">
-            <span className="prob-label">{labels[qid][key] ?? key}</span>
-            <span className="prob-track"><span className="prob-fill" style={{ width: pct(p) }} />
-              <span className="prob-need" style={{ left: pct(need(qid, key)) }} aria-hidden="true" /></span>
-            <span className="prob-value tabular">{pct(p)}</span>
-          </div>
-        ))}
+        {rows.map(([key, p]) => {
+          const threshold = need(qid, key);
+          return (
+            <div key={key} className="prob-row">
+              <span className="prob-label">{labels[qid][key] ?? key}</span>
+              <span className="prob-track"><span className="prob-fill" style={{ width: pct(p) }} />
+                {threshold !== undefined ? <span className="prob-need" style={{ left: pct(threshold) }} aria-hidden="true" /> : null}</span>
+              <span className="prob-value tabular">{pct(p)}</span>
+            </div>
+          );
+        })}
       </div>
     );
   };
@@ -675,7 +731,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
       ) : (
       <div className="dispatch-bar">
           <label>시연 통화
-            <select value={callId} onChange={(e) => setCallId(e.target.value)}>
+            <select value={callId} onChange={(e) => { reset(); setCall(null); setCallId(e.target.value); }}>
               {calls.map((s) => <option key={s.id} value={s.id}>{s.private ? '★ ' : ''}{s.title}</option>)}
             </select>
           </label>
@@ -722,7 +778,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
                 <li key={i} data-speaker={line.speaker}>
                   <span className="who">{line.speaker === 0 ? '수보요원' : '신고자'} · {i + 1}턴</span>
                   <p>{line.text}</p>
-                  {line.note ? <span className={`dt-note ${line.note === 'WAIT' ? 'is-wait' : 'is-commit'}`}>{line.note}</span> : null}
+                  {line.note ? <span className={`dt-note ${line.note.startsWith('COMMIT') ? 'is-commit' : 'is-wait'}`}>{line.note}</span> : null}
                 </li>
               ))}
               {!lines.length ? <li className="meta">{live ? '지도에서 위치를 고르면 119 상황실 수보요원이 전화를 받습니다.'
@@ -730,25 +786,28 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
             </ol>
             {live ? (
               <form className="live-form" onSubmit={(e) => { e.preventDefault(); void send(); }}>
-                <textarea rows={2} maxLength={2000} value={draft} disabled={!call?.area}
+                <textarea rows={2} maxLength={2000} value={draft} disabled={!call?.area || busy || !!pendingReply.current}
                   placeholder={call?.area ? '신고자로 입력 (Enter 전송, Shift+Enter 줄바꿈) · 예: 아버지가 갑자기 쓰러지셨어요' : '먼저 지도에서 위치를 클릭하세요'}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
-                <button type="submit" className="button primary" disabled={!call?.area || busy || !draft.trim()}>{busy ? '판단 중…' : '보내기'}</button>
+                <button type="submit" className="button primary" disabled={!call?.area || busy || (!draft.trim() && !pendingReply.current)}>
+                  {busy ? '판단 중…' : pendingReply.current ? '같은 턴 다시 시도' : '보내기'}
+                </button>
               </form>
             ) : null}
           </section>
           <section className="panel dispatch-card dispatch-transfer" data-role="hospital">
             <header className="panel-header"><h2 className="section-title">이송 병원</h2>
               <span className="meta">{transfer?.zoro?.latency_ms ? `Zoro ${Math.round(transfer.zoro.latency_ms)}ms` : ''}</span></header>
-            {!transfer ? <p className="meta">구급으로 확정되면 지침 기준과 응급실 실시간 병상으로 후보를 고르고 Zoro가 이송 병원을 선택합니다.</p>
+            {transport ? <p className="meta">이송 지령 기록 · {transport.hospital.name}</p> : null}
+            {!transfer ? <p className="meta">{sft.reviewTurn !== null ? `${sft.reviewTurn}턴 재검토로 이송이 보류되었습니다.`
+              : '구급과 세부유형이 확정되면 지침 기준과 응급실 병상 정보로 이송 병원 후보를 비교합니다.'}</p>
               : transfer.status === 'unconfigured' ? <p className="meta">국립중앙의료원 API 키(NMC_SERVICE_KEY)가 설정되지 않아 병원 정보를 가져오지 못했습니다.</p>
               : transfer.status === 'unavailable' ? <p className="meta">국립중앙의료원 API 응답이 없습니다. 잠시 뒤 다시 시도합니다.</p> : (
               <>
                 <p className="transfer-rule"><strong>{transfer.rule.category}</strong> · {transfer.rule.text}</p>
-                {transferSymptom ? <p className={`transfer-basis ${transferSymptom.committed ? 'is-commit' : 'is-wait'}`}>
-                  {transferSymptom.committed ? `주증상 ${transferSymptom.label} 확정 기준`
-                    : `주증상 미확정 · 현재 추정 ${transferSymptom.label} ${Math.round(transferSymptom.p * 100)}% 기준 (확정·변경 시 다시 계산)`}</p> : null}
+                {transferBasis ? <p className="transfer-basis is-commit">
+                  세부유형 {transferBasis.subtype} 확정{transferBasis.symptom ? ` · 주증상 ${transferBasis.symptom} 확정` : ''}</p> : null}
                 {transfer.rule.prefer?.length ? <p className="meta">필요 처치: {transfer.rule.prefer.join(', ')}</p> : null}
                 <p className="do-source">근거: {transfer.rule.source}</p>
                 {!transfer.hospitals.length ? <p className="meta">기준에 맞고 응급실 병상이 있는 병원이 주변에 없습니다.</p> : (
@@ -788,7 +847,8 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
           <section className="panel dispatch-card dispatch-orders-card" data-role="orders">
             <header className="panel-header"><h2 className="section-title">출동 지령</h2>
               <span className="meta">{call?.area ? `${call.area.district} ${call.area.dong}` : ''}</span></header>
-            {!orders.length ? <p className="meta">{c.dispatch ? (c.dispatch.label === '기타' ? '기타: 출동 없이 상담·이첩' : '배차 계산 중…')
+            {!orders.length ? <p className="meta">{sft.reviewTurn !== null ? `${sft.reviewTurn}턴 재검토로 출동이 보류되었습니다.`
+              : c.dispatch ? (c.dispatch.label === '기타' ? '기타: 출동 없이 상담·이첩' : '배차 계산 중…')
               : '출동유형이 확정되면 가장 빨리 도착하는 차량을 보냅니다.'}</p> : (
               <ol className="dispatch-orders">
                 {orders.map((o, i) => (

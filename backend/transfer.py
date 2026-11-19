@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .call_area import _dongs
+from .demo_harness import valid_distribution
 from .routing import _setting, route
 
 
@@ -249,6 +250,13 @@ def _criterion(h, rule, drop=()):
     return f"{h['name']} · " + " · ".join(parts)
 
 
+def _winner(scores, candidates):
+    if not candidates or not valid_distribution(scores, candidates.keys()):
+        return None
+    best = max(scores, key=scores.get)
+    return best if sum(p == scores[best] for p in scores.values()) == 1 else None
+
+
 async def zoro_choice(turns, rule, hospitals, drop=()):
     """Released-head choice over the candidates via the decision server's /v1/choose."""
     url = os.getenv("SENTINEL_ZORO_URL", "").strip().rstrip("/")
@@ -266,11 +274,12 @@ async def zoro_choice(turns, rule, hospitals, drop=()):
             data = response.json()
     except (httpx.HTTPError, ValueError):
         return None
-    try:
-        probabilities = {h["hpid"]: float(data["results"]["probabilities"][h["hpid"]]) for h in hospitals}
-    except (KeyError, TypeError, ValueError):
+    results = data.get("results") if isinstance(data, dict) else None
+    probabilities = results.get("probabilities") if isinstance(results, dict) else None
+    choice = _winner(probabilities, question["criteria"])
+    if choice is None:
         return None
-    return {"probabilities": probabilities, "choice": max(probabilities, key=probabilities.get),
+    return {"probabilities": probabilities, "choice": choice,
             "latency_ms": data.get("latency_ms"), "question": question}
 
 
@@ -370,12 +379,17 @@ async def zoro_reason(turns, rule, hospitals, question):
     except (httpx.HTTPError, ValueError):
         return None
     names = {h["hpid"]: h["name"] for h in hospitals}
-    if not isinstance(data.get("reasoned"), dict) or not data["reasoned"]:
-        return None  # cut-off reasoning is not re-scored by the server
-    choice = max(data["reasoned"], key=data["reasoned"].get)
+    if (not isinstance(data, dict) or data.get("reasoning_finished") is not True
+            or not isinstance(data.get("reasoning"), str) or type(data.get("reasoning_tokens")) is not int
+            or data["reasoning_tokens"] < 0 or type(data.get("reasoning_ms")) not in (int, float)
+            or not 0 <= data["reasoning_ms"] < math.inf):
+        return None
+    choice = _winner(data.get("reasoned"), names)
+    if choice is None or not valid_distribution(data.get("direct"), names.keys()):
+        return None
     return {"text": data["reasoning"], "finished": data["reasoning_finished"], "tokens": data["reasoning_tokens"],
             "ms": data["reasoning_ms"], "direct": data["direct"], "reasoned": data["reasoned"], "choice": choice,
-            "choice_name": names.get(choice, choice)}
+            "choice_name": names[choice]}
 
 
 class TransferRequest(BaseModel):
@@ -406,6 +420,7 @@ async def transfer(body: TransferRequest):
     choice = await zoro_choice(turns, rule, hospitals) if status == "ok" else None
     reason = None
     if body.explain and choice:
+        reasoned = None
         if body.reason:
             reason, reasoned = await asyncio.gather(explain(turns, rule, hospitals, choice),
                                                     zoro_reason(turns, rule, hospitals, choice["question"]),
@@ -415,7 +430,7 @@ async def transfer(body: TransferRequest):
             if isinstance(reasoned, Exception):
                 reasoned = None
         else:
-            reason, reasoned = await explain(turns, rule, hospitals, choice), None
+            reason = await explain(turns, rule, hospitals, choice)
         reason["reasoned"] = reasoned
     for h in hospitals:
         h["context"] = _criterion(h, rule)

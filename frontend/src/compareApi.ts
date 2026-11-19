@@ -1,5 +1,6 @@
 // Model comparison tab: one transcript prefix to the plain LLM, SENTINEL_ZORO and base Zoro.
 import type { CallArea } from './dispatchApi';
+import type { Harness } from './demoHarness';
 export interface CompareScenario { id: string; title: string; summary: string; private?: boolean; area?: string | null }
 export interface ScenarioDetail extends Omit<CompareScenario, 'area'> {
   gold?: Record<string, string> | null;
@@ -24,11 +25,13 @@ export interface StreamResponse {
   profile: string;
   labels: Record<string, Record<string, string>>;
   results: Record<'sft' | 'base', StreamVariantResult>;
+  harness: Harness;
 }
 
 const messages: Record<string, string> = {
   compare_unconfigured: 'SENTINEL_ZORO_URL이 설정되지 않아 모델 비교를 실행할 수 없습니다.',
   compare_unavailable: '모델 서버에 연결하지 못했습니다.',
+  compare_harness_invalid: '모델 또는 판단 정책을 확인할 수 없습니다.',
   scenario_not_found: '비교할 통화를 찾지 못했습니다.',
 };
 export class ApiError extends Error {}

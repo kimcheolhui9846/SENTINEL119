@@ -378,4 +378,4 @@ H4, dev 83통화 기준:
 
 - 응답의 `model.checkpoint`(경로, 모드, 파일 sha256, `max_length`)는 데모의 모델 고정 식별자 계산에 쓰인다. 체크포인트를 바꾸면 데모 쪽 고정 식별자도 함께 갱신해야 한다.
 - 확률은 보정하지 않은 softmax(T = 1)다. 공개 Zoro-1은 보정 온도 1.59를 함께 배포하지만, 학습·평가와 데모 임계값 조정이 모두 T = 1 기준이므로 그대로 쓴다.
-- 턴 단위 WAIT/COMMIT 임계값은 서버가 아니라 데모가 적용한다. 현재 값은 위 H4 dev 83통화 기준이다(`frontend/src/CompareView.tsx`).
+- 세 데모 화면은 비교 API가 [H4 런타임 프로필](../backend/data/demo-harness.json)로 검증한 확정 후보를 사용한다. 기본값은 위 H4 dev 83통화 기준이다. 새 모델의 프로필 교체 방법은 [데모 수보 하네스](handoffs/demo-harness.md)를 참조한다.

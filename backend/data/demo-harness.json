@@ -1,0 +1,24 @@
+{
+  "version": "h4-dev83-v1",
+  "model_id": "team-demo/sft/zoro-hier-h4@sha256:2596316b5f53d7cceb99afbc984d21e4ce12b35e2ab2577b7b50cc66b28d264c",
+  "thresholds": {
+    "dispatch": 0.82,
+    "subtype": 0.86,
+    "urgency": 0.82,
+    "symptom": 0.69
+  },
+  "dispatch_overrides": {
+    "ems": 0.66,
+    "rescue": 0.86,
+    "fire": 0.79,
+    "other": 0.82
+  },
+  "subtype_overrides": {
+    "ems_subtype": 0.86,
+    "rescue_subtype": 0.68
+  },
+  "withdrawals": [
+    "정정할게요. 연습 상황이었고 구급차 요청을 취소합니다.",
+    "신고를 취소합니다."
+  ]
+}
