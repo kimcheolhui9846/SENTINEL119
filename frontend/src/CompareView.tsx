@@ -106,6 +106,21 @@ function Chips({ dist, labels, commit, threshold, locked, picked }: {
   );
 }
 
+// 16 symptom options do not fit one screen: folded by default, the summary shows the commit or the leader.
+function SymptomFold({ dist, labels, commit }: { dist: Record<string, number>; labels: Record<string, string>; commit?: Commit }) {
+  const best = top(dist);
+  return (
+    <details className="sym-fold">
+      <summary>
+        {commit ? <strong className="sym-commit">✓ {commit.label} · {commit.turn}턴 확정</strong>
+          : best ? <span className="tabular">1순위 {labels[best[0]] ?? best[0]} {Math.round(best[1] * 100)}% · 확정 {Math.round(THRESHOLD.symptom * 100)}%↑</span>
+          : null}
+      </summary>
+      <Chips dist={dist} labels={labels} commit={commit} threshold={THRESHOLD.symptom} />
+    </details>
+  );
+}
+
 function Latency({ last, list, busy }: { last?: number; list: number[]; busy: boolean }) {
   return (
     <div className="latency">
@@ -146,7 +161,7 @@ export function ZoroPanel({ id, name, note, model, labels, busy }: {
           {!d ? <span className="pending">출동유형 확정 후 열림</span>
             : subQ !== "ems_subtype" ? <span className="pending">{d.label}: 구급 출동에서만 판단</span>
             : probs?.ems_symptom && labels?.ems_symptom
-              ? <Chips dist={probs.ems_symptom} labels={labels.ems_symptom} commit={model.commits.symptom} threshold={THRESHOLD.symptom} />
+              ? <SymptomFold dist={probs.ems_symptom} labels={labels.ems_symptom} commit={model.commits.symptom} />
               : <span className="pending">이 체크포인트는 주증상을 학습하지 않음</span>}
         </div>
       </div>

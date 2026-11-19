@@ -1058,6 +1058,12 @@ textarea:focus-visible, select:focus-visible, input:focus-visible {
 .compare .drow { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr); gap: var(--s2); align-items: center; }
 .compare .dlabel { font-size: 14px; color: var(--muted); }
 .compare .pending { font-size: 14px; color: var(--muted); border: 1px dashed var(--line); border-radius: var(--radius); padding: 4px var(--s2); }
+.compare .sym-fold summary { cursor: pointer; font-size: 14px; color: var(--muted); padding: 4px var(--s2);
+  border: 1px solid var(--line); border-radius: var(--radius); list-style-position: inside; }
+.compare .sym-fold summary:hover { border-color: var(--quiet, var(--muted)); }
+.compare .sym-fold summary:focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }
+.compare .sym-fold .sym-commit { color: var(--ok, #1f8a5b); }
+.compare .sym-fold[open] summary { margin-bottom: var(--s2); }
 .compare .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .compare .chip-opt {
   --p: 0; position: relative; display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px;
