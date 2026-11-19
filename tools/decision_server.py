@@ -8,6 +8,8 @@ rendering, question text and a checkpoint's recorded prompt are exactly those us
   POST /v1/stream    turn-wise dispatch / subtype / urgency (+ symptom) for sft and base on one prefix
   POST /v1/llm       plain-LLM baseline (--llm, e.g. Qwen/Qwen3.5-4B): generated JSON answer for the same prefix
   GET  /v1/health    pinned model identity, available variants and checkpoint hashes
+  POST /v1/reason     Zoro-1 "reasoned action": the same weights write their reasoning (<think>), which is added
+                      to the state, then the released head re-scores the options (zoro_decide.py protocol)
   GET  /v1/models     console-compatible model list: "sentinel-zoro" (sft) and "zoro-base"
   POST /v1/systemone  console-compatible typed choices. dispatch/urgency with the console's Korean labels
                       run the trained question text and keys (sft adds hierarchy answers); any other choice
@@ -131,6 +133,57 @@ class ChooseRequest(BaseModel):
 def render_state(turns):
     """Identical to sentinel119.prepare.make_example."""
     return "\n".join(f"화자{t.speaker}: {t.text}" for t in turns)
+
+
+# Zoro-1 reasoned action (model card "Reasoned action", zoro_decide.py / decide_request.py at the pinned revision):
+# one user message = state + question + options + this instruction, thinking on, sampled at 0.6 / 0.95 / 20, stop at
+# </think>. The Korean sentence is our addition so the reasoning can be shown on the Korean demo screen.
+REASONING_INSTRUCTION = ("Think it through step by step: work out anything that needs calculating or checking, then "
+                         "say which option you choose for each question. 생각 과정과 답을 모두 한국어로 간결하게 쓰세요.")
+END_THINK = "</think>"
+
+
+class ReasonRequest(BaseModel):
+    turns: list[Turn] = Field(min_length=1)
+    question: ChoiceQuestion
+    max_new_tokens: int = Field(default=512, ge=32, le=2048)
+
+
+class Reasoner:
+    """Zoro-1 as a language model (loaded on the first request); the decision itself stays with the head."""
+
+    def __init__(self, model_dir, device="cuda"):
+        self.model_dir, self.device = model_dir, device
+        self.lm = self.tokenizer = None
+        self.lock = threading.Lock()
+
+    def _load(self):
+        if self.lm is None:
+            from transformers import AutoModelForImageTextToText, AutoTokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_dir, local_files_only=True)
+            self.lm = AutoModelForImageTextToText.from_pretrained(self.model_dir, dtype=torch.bfloat16,
+                                                                  local_files_only=True).to(self.device).eval()
+            self.stops = [self.tokenizer.convert_tokens_to_ids(x) for x in (END_THINK, "<|im_end|>")]
+
+    def think(self, state, question, max_new_tokens):
+        options = "\n".join(f"- {k}: {v}" if v else f"- {k}" for k, v in question["criteria"].items())
+        message = (f"{state}\n\nQuestion (choice): {question['instructions']}\nOptions:\n{options}"
+                   f"\n\n{REASONING_INSTRUCTION}")
+        with self.lock, torch.no_grad():
+            self._load()
+            text = self.tokenizer.apply_chat_template([{"role": "user", "content": message}], tokenize=False,
+                                                      add_generation_prompt=True, enable_thinking=True)
+            ids = self.tokenizer(text, return_tensors="pt").to(self.lm.device)
+            start = time.perf_counter()
+            out = self.lm.generate(**ids, max_new_tokens=max_new_tokens, do_sample=True, temperature=0.6, top_p=0.95,
+                                   top_k=20, eos_token_id=self.stops, pad_token_id=self.tokenizer.eos_token_id)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            elapsed = (time.perf_counter() - start) * 1000
+        new = out[0, ids["input_ids"].shape[1]:]
+        finished = bool(len(new)) and int(new[-1]) in self.stops
+        reasoning = self.tokenizer.decode(new, skip_special_tokens=True).replace(END_THINK, "").strip()
+        return reasoning, elapsed, int(len(new)), finished
 
 
 class Decider:
@@ -313,7 +366,7 @@ def systemone(decider, request):
     return {"model": request.model, "answers": answers, "hierarchy": hierarchy, "latency_ms": elapsed}
 
 
-def create_app(decider, generator=None):
+def create_app(decider, generator=None, reasoner=None):
     app = FastAPI(title="SENTINEL119 Zoro decision server")
 
     @app.get("/v1/health")
@@ -359,6 +412,24 @@ def create_app(decider, generator=None):
         return {"model": {"model_id": generator.model_id, "variant": "llm"}, "text": raw, "answer": parse_llm(raw, labels),
                 "latency_ms": elapsed, "new_tokens": new_tokens}
 
+    @app.post("/v1/reason")
+    def reason(request: ReasonRequest):
+        """Reasoned choice with the released head: think in text, add it to the state, then score the options."""
+        if reasoner is None:
+            raise HTTPException(503, "Reasoning is not enabled; start the server with --reasoning")
+        question = {"instructions": request.question.instructions, "criteria": request.question.criteria}
+        state = render_state(request.turns)
+        reasoning, ms, tokens, finished = reasoner.think(state, question, request.max_new_tokens)
+        direct, direct_ms = decider._scores({"state": state, "questions": {"choice": {"type": "choice", **question}}}, "base")
+        # decide_request.with_reasoning on a plain-string state, rendered as decide_request.render does.
+        reasoned_state = f"situation: {state}\nreasoning: {reasoning}"
+        results, decide_ms = decider._scores({"state": reasoned_state,
+                                              "questions": {"choice": {"type": "choice", **question}}}, "base")
+        return {"model": decider.describe("base"), "reasoning": reasoning, "reasoning_tokens": tokens,
+                "reasoning_finished": finished, "reasoning_ms": ms,
+                "direct": direct["choice"]["probabilities"], "reasoned": results["choice"]["probabilities"],
+                "decide_ms": direct_ms + decide_ms}
+
     @app.post("/v1/choose")
     def choose(request: ChooseRequest):
         question = {"type": "choice", "instructions": request.question.instructions,
@@ -377,12 +448,15 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8119)
     parser.add_argument("--allow-download", action="store_true", help="Permit fetching the pinned revision")
+    parser.add_argument("--reasoning", action="store_true",
+                        help="Enable /v1/reason (loads Zoro-1 as a language model on first use, ~9 GB more GPU memory)")
     parser.add_argument("--llm", help="Also load a plain LLM baseline for /v1/llm, e.g. Qwen/Qwen3.5-4B")
     args = parser.parse_args()
     import uvicorn
     decider = Decider(args.checkpoint, args.device, local_files_only=not args.allow_download)
     generator = Generator(args.llm, args.device) if args.llm else None
-    uvicorn.run(create_app(decider, generator), host=args.host, port=args.port)
+    reasoner = Reasoner(decider.identity["local_model_dir"], args.device) if args.reasoning else None
+    uvicorn.run(create_app(decider, generator, reasoner), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":
