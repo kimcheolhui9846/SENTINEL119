@@ -119,12 +119,12 @@ async def assign(incident, steps, busy=(), positions=None):
     units = [{**u, **(positions or {}).get(u["id"], {})} for u in fleet()]
     for step in steps:
         pool = sorted((u for u in units if u["kind"] == step["kind"] and u["id"] not in taken),
-                      key=lambda u: _km(u, incident))[:_CANDIDATES_PER_KIND]
+                      key=lambda u: (_km(u, incident), u["id"]))[:_CANDIDATES_PER_KIND]
         if not pool:
             out.append({**step, "unit": None})
             continue
         routes = await asyncio.gather(*(route(u, incident) for u in pool))
-        unit, path = min(zip(pool, routes), key=lambda pair: pair[1]["duration_s"])
+        unit, path = min(zip(pool, routes), key=lambda pair: (pair[1]["duration_s"], pair[0]["id"]))
         taken.add(unit["id"])
         out.append({**step, "unit": unit, "route": path})
     return out

@@ -1,0 +1,17 @@
+{
+  "version": "inherited-e1-v1",
+  "model_id": "team-demo/sft/zoro-hier-h4@sha256:2596316b5f53d7cceb99afbc984d21e4ce12b35e2ab2577b7b50cc66b28d264c",
+  "thresholds": {
+    "dispatch": 0.90,
+    "subtype": 0.85,
+    "urgency": 0.85,
+    "symptom": 0.80
+  },
+  "dispatch_overrides": {
+    "fire": 0.75
+  },
+  "withdrawals": [
+    "정정할게요. 연습 상황이었고 구급차 요청을 취소합니다.",
+    "신고를 취소합니다."
+  ]
+}

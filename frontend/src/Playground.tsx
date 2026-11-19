@@ -1,8 +1,10 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiError, api } from './compareApi';
-import { advance, emptyLlm, emptyZoro, llmNote, LlmPanel, ZoroPanel } from './CompareView';
-import type { Labels, LlmState, ZoroId, ZoroState } from './CompareView';
+import { emptyLlm, LlmPanel, ZoroPanel } from './CompareView';
+import type { Labels, LlmState } from './CompareView';
+import { advanceHarness, emptyZoro } from './demoHarness';
+import type { ZoroId, ZoroState } from './demoHarness';
 
 type Speaker = 0 | 1;
 interface Line { speaker: Speaker; text: string; note?: string; ms?: number }
@@ -18,42 +20,58 @@ export default function Playground() {
   const [labels, setLabels] = useState<Labels | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const zoroRef = useRef(zoro);
-  zoroRef.current = zoro;
+  const inFlight = useRef(false);
+  const run = useRef(0);
+  const committed = useRef(zoro);
+
+  useEffect(() => () => { run.current += 1; }, []);
 
   function reset() {
-    setLines([]); setZoro({ sft: emptyZoro(), base: emptyZoro() }); setLlm(emptyLlm()); setError(null);
+    run.current += 1;
+    inFlight.current = false;
+    committed.current = { sft: emptyZoro(), base: emptyZoro() };
+    setLines([]); setZoro(committed.current); setLlm(emptyLlm()); setError(null);
+    setLabels(null); setDraft(''); setBusy(false);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = draft.trim();
-    if (!text || busy) return;
+    if (!text || inFlight.current || lines.length !== committed.current.sft.turn) return;
+    const myRun = run.current;
     const turns = [...lines.map(({ speaker: s, text: t }) => ({ speaker: s, text: t })), { speaker, text }];
-    setLines([...lines, { speaker, text }]); setDraft(''); setBusy(true); setError(null);
+    inFlight.current = true; setBusy(true); setError(null);
     try {
       const res = await api.streamDecide(turns);
-      setLabels(res.labels);
-      const next = { ...zoroRef.current };
+      if (myRun !== run.current) return;
+      const next = { ...committed.current };
       let note = '';
       for (const id of ['sft', 'base'] as ZoroId[]) {
-        const { next: updated, note: n } = advance(next[id], res.results[id].probabilities, turns.length, res.labels);
+        const { next: updated, note: n, accepted } = advanceHarness(
+          next[id], res.results[id].probabilities, { number: turns.length, speaker }, res.harness, id);
+        if (!accepted) throw new ApiError(n);
         next[id] = { ...updated, latencies: [...next[id].latencies, res.results[id].latency_ms] };
         if (id === 'sft') note = n;
       }
+      committed.current = next;
       setZoro(next);
-      setLines((list) => list.map((line, i) => (i === turns.length - 1 ? { ...line, note, ms: res.results.sft.latency_ms } : line)));
+      setLabels(res.labels);
+      setLines([...lines, { speaker, text, note, ms: res.results.sft.latency_ms }]); setDraft('');
       if (withLlm) {
         setLlm((s) => ({ ...s, pending: true }));
         const out = await api.streamLlm(turns);
+        if (myRun !== run.current) return;
         setLlm((s) => ({ answer: out.answer, raw: out.text, latencies: [...s.latencies, out.latency_ms], pending: false }));
-        void llmNote;
       }
     } catch (e) {
+      if (myRun !== run.current) return;
       setLlm((s) => ({ ...s, pending: false }));
       setError(e instanceof ApiError ? e.message : '판단 요청에 실패했습니다.');
     } finally {
-      setBusy(false);
+      if (myRun === run.current) {
+        inFlight.current = false;
+        setBusy(false);
+      }
     }
   }
 
@@ -69,7 +87,7 @@ export default function Playground() {
               <li key={i} className={`call-turn speaker-${line.speaker}`}>
                 <span className="who">{line.speaker === 0 ? '수보요원' : '신고자'}</span>
                 <p>{line.text}</p>
-                {line.note ? <p className={`zoro-note ${line.note === 'WAIT' ? 'is-wait' : 'is-commit'}`}>
+                {line.note ? <p className={`zoro-note ${line.note.startsWith('COMMIT') ? 'is-commit' : 'is-wait'}`}>
                   <span className="zoro-tag">SENTINEL_ZORO</span>{line.note}
                   <span className="muted tabular"> {Math.round(line.ms ?? 0)}ms</span></p> : null}
               </li>

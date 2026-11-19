@@ -1,14 +1,11 @@
 """Opt-in console adapter for the team SFT demo's turn-wise intake endpoint."""
 
 import asyncio
-import hashlib
-import json
-import math
-import re
 
 import httpx
 
 from .api import create_app
+from .demo_harness import _model_identity, valid_distribution
 from .inference import _CALL_TIMEOUT, Inference, InferenceError, _json_request, _role_endpoint, sentinel_url
 
 
@@ -17,8 +14,6 @@ _LABELS = {
     "dispatch": {"fire": "화재", "rescue": "구조", "ems": "구급", "other": "기타"},
     "urgency": {"high": "상", "medium": "중", "low": "하"},
 }
-_CHECKPOINT_FILES = {"decision_head.pt", "adapter_config.json", "adapter_model.safetensors"}
-_SLUG = r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}"
 
 
 def _turn_prefix(state):
@@ -38,49 +33,10 @@ def _turn_prefix(state):
     return prefix
 
 
-def _matches(pattern, value):
-    return isinstance(value, str) and re.fullmatch(pattern, value) is not None
-
-
-def _model_identity(model):
-    if not isinstance(model, dict) or model.get("variant") != "sft":
-        raise InferenceError("model_identity")
-    model_id, revision, prompt = model.get("model_id"), model.get("revision"), model.get("prompt_variant")
-    if (not _matches(rf"{_SLUG}(?:/{_SLUG})?", model_id)
-            or not _matches(r"[0-9a-fA-F]{40}", revision)
-            or not _matches(_SLUG, prompt)):
-        raise InferenceError("model_identity")
-
-    checkpoint = model.get("checkpoint")
-    if not isinstance(checkpoint, dict) or checkpoint.get("mode") != "lora":
-        raise InferenceError("model_identity")
-    name, digests = checkpoint.get("path"), checkpoint.get("sha256")
-    if (not _matches(_SLUG, name) or not isinstance(digests, dict) or digests.keys() != _CHECKPOINT_FILES
-            or any(not _matches(r"[0-9a-fA-F]{64}", value) for value in digests.values())):
-        raise InferenceError("model_identity")
-
-    identity = {
-        "model_id": model_id, "revision": revision.lower(), "variant": "sft", "prompt_variant": prompt,
-        "checkpoint": {"path": name, "mode": "lora", "sha256": {key: value.lower() for key, value in digests.items()}},
-    }
-    if "max_length" in checkpoint:
-        max_length = checkpoint["max_length"]
-        if type(max_length) is not int or max_length <= 0:
-            raise InferenceError("model_identity")
-        identity["checkpoint"]["max_length"] = max_length
-    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return f"team-demo/sft/{name}@sha256:{hashlib.sha256(encoded).hexdigest()}"
-
-
 def _choice_answer(distribution, labels):
-    if not isinstance(distribution, dict) or distribution.keys() != labels.keys():
+    if not valid_distribution(distribution, labels.keys()):
         raise InferenceError("model_response_invalid")
     scores = list(distribution.values())
-    # The range check also rejects NaN and infinities without coercing large integers.
-    if any(type(score) not in (int, float) or not 0 <= score <= 1 for score in scores):
-        raise InferenceError("model_response_invalid")
-    if not math.isclose(math.fsum(scores), 1.0, rel_tol=0, abs_tol=1e-5):
-        raise InferenceError("model_response_invalid")
     winner = max(distribution, key=distribution.get)
     if scores.count(distribution[winner]) != 1:
         raise InferenceError("model_response_invalid")

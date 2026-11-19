@@ -1,36 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "./compareApi";
 import type { CompareScenario as ScenarioSummary, LlmResponse, ScenarioDetail, StreamResponse } from "./compareApi";
+import { advanceHarness, emptyZoro, harnessThreshold, SUBTYPE_OF, suspendHarness } from "./demoHarness";
+import type { Commit, ZoroId, ZoroState } from "./demoHarness";
 
-// Commit thresholds chosen on dev turn prefixes (63 calls, E1) by the spec reward: +1 correct, -4 wrong, 0 never.
-// The same thresholds apply to both decision models.
-// The SFT head is under-confident on fire (minority class): its fire probability tops out near 0.8 on clear
-// fire calls. Provisional per-type dispatch threshold until the final checkpoint is re-calibrated on dev.
-export const DISPATCH_THRESHOLD: Record<string, number> = { fire: 0.75 };
-export const THRESHOLD = { dispatch: 0.9, subtype: 0.85, urgency: 0.85, symptom: 0.8 } as const;
-// Measured on those dev prefixes at these thresholds: precision of commits (commit rate).
-const DEV_PRECISION = {
-  calls: 63,
-  rows: [
-    { task: "출동유형", sft: [0.947, 0.905], base: [0.797, 0.937] },
-    { task: "세부유형", sft: [0.8, 0.357], base: [0.167, 0.536] },
-    { task: "긴급도", sft: [1.0, 0.016], base: [0.333, 0.571] },
-  ],
-};
-const pct = (x: number) => `${Math.round(x * 100)}%`;
 const TYPE_MS = 420;
 const NEXT_DELAY_MS = 900;
-const SUBTYPE_OF: Record<string, "ems_subtype" | "rescue_subtype"> = { ems: "ems_subtype", rescue: "rescue_subtype" };
 export type Labels = StreamResponse["labels"];
-export type ZoroId = "sft" | "base";
-type Task = "dispatch" | "subtype" | "urgency" | "symptom";
-
-interface Commit { key: string; label: string; p: number; turn: number }
-export interface ZoroState {
-  probs: StreamResponse["results"]["sft"]["probabilities"] | null;
-  commits: Partial<Record<Task, Commit>>;
-  latencies: number[];
-}
 export interface LlmState { answer: LlmResponse["answer"] | null; raw: string; latencies: number[]; pending: boolean }
 interface TurnLog {
   speaker: 0 | 1;
@@ -39,33 +15,10 @@ interface TurnLog {
   ms: Partial<Record<ZoroId | "llm", number>>;
 }
 
-export const emptyZoro = (): ZoroState => ({ probs: null, commits: {}, latencies: [] });
 export const emptyLlm = (): LlmState => ({ answer: null, raw: "", latencies: [], pending: false });
 const top = (dist?: Record<string, number>) =>
   dist ? (Object.entries(dist).sort((a, b) => b[1] - a[1])[0] as [string, number]) : undefined;
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
-
-export function advance(state: ZoroState, probs: ZoroState["probs"], turn: number, labels: Labels) {
-  const commits = { ...state.commits };
-  const fresh: string[] = [];
-  const tryCommit = (task: Task, qid: string, threshold: number, name: string) => {
-    const best = top(probs?.[qid as keyof NonNullable<ZoroState["probs"]>]);
-    const needed = task === "dispatch" && best ? DISPATCH_THRESHOLD[best[0]] ?? threshold : threshold;
-    if (!commits[task] && best && best[1] >= needed) {
-      const label = labels[qid]?.[best[0]] ?? best[0];
-      commits[task] = { key: best[0], label, p: best[1], turn };
-      fresh.push(`${name} ${label}`);
-    }
-  };
-  tryCommit("dispatch", "dispatch", THRESHOLD.dispatch, "출동유형");
-  if (commits.dispatch) {  // the hierarchy opens only after the dispatch type is fixed
-    const subQ = SUBTYPE_OF[commits.dispatch.key];
-    if (subQ) tryCommit("subtype", subQ, THRESHOLD.subtype, "세부유형");
-    tryCommit("urgency", "urgency", THRESHOLD.urgency, "긴급도");
-    if (subQ === "ems_subtype" && probs?.ems_symptom) tryCommit("symptom", "ems_symptom", THRESHOLD.symptom, "주증상");
-  }
-  return { next: { ...state, probs, commits }, note: fresh.length ? `COMMIT · ${fresh.join(" · ")}` : "WAIT" };
-}
 
 export function llmNote(answer: LlmResponse["answer"], labels: Labels) {
   const parts = [
@@ -83,7 +36,6 @@ function Chips({ dist, labels, commit, threshold, locked, picked }: {
 }) {
   const best = top(dist);
   const leader = best?.[0];
-  const conflict = commit && best && threshold && best[0] !== commit.key && best[1] >= threshold ? best : undefined;
   return (
     <div className="chips" role="list">
       {Object.entries(labels).map(([key, label]) => {
@@ -99,7 +51,6 @@ function Chips({ dist, labels, commit, threshold, locked, picked }: {
         );
       })}
       {!commit && !locked && dist && threshold ? <span className="chip-rule tabular">확정 {Math.round(threshold * 100)}%↑</span> : null}
-      {conflict ? <span className="chip-flag tabular">재검토: 지금은 {labels[conflict[0]] ?? conflict[0]} {Math.round(conflict[1] * 100)}%</span> : null}
     </div>
   );
 }
@@ -120,29 +71,34 @@ export function ZoroPanel({ id, name, note, model, labels, busy }: {
   const probs = model.probs ?? undefined;
   const d = model.commits.dispatch;
   const subQ = d ? SUBTYPE_OF[d.key] : undefined;
+  const threshold = (question: string, key?: string) => harnessThreshold(model.profile, question, key);
+  const overrides = Object.entries(model.profile?.dispatch_overrides ?? {})
+    .map(([key, value]) => ` · ${labels?.dispatch[key] ?? key} ${Math.round(value! * 100)}%`).join("");
   return (
     <section className={`model-panel variant-${id}`} aria-label={name}>
       <div className="model-id">
         <span className="model-kind">Decision 모델</span>
         <h2>{name}</h2>
         <p className="muted">{note}</p>
+        {model.reviewTurn !== null ? <p className="chip-flag">재검토 · {model.reviewTurn}턴</p> : null}
+        {model.profile ? <p className="muted">출동유형 기준 {Math.round(model.profile.thresholds.dispatch * 100)}%{overrides}</p> : null}
       </div>
       <div className="decision-rows">
         <div className="drow"><span className="dlabel">출동유형</span>
-          {labels ? <Chips dist={probs?.dispatch} labels={labels.dispatch} commit={d} threshold={THRESHOLD.dispatch} /> : null}
+          {labels ? <Chips dist={probs?.dispatch} labels={labels.dispatch} commit={d} threshold={threshold("dispatch", top(probs?.dispatch)?.[0])} /> : null}
         </div>
         <div className="drow"><span className="dlabel">세부유형</span>
           {!d ? <span className="pending">출동유형 확정 후 열림</span>
-            : subQ && labels ? <Chips dist={probs?.[subQ]} labels={labels[subQ]} commit={model.commits.subtype} threshold={THRESHOLD.subtype} />
+            : subQ && labels?.[subQ] ? <Chips dist={probs?.[subQ]} labels={labels[subQ]} commit={model.commits.subtype} threshold={threshold(subQ)} />
             : <span className="pending">{d.label}: 대분류에서 판단 종료</span>}
         </div>
         <div className="drow"><span className="dlabel">긴급도</span>
           {labels ? <Chips dist={probs?.urgency} labels={labels.urgency} commit={model.commits.urgency}
-                           threshold={THRESHOLD.urgency} locked={!d} /> : null}
+                           threshold={threshold("urgency")} locked={!d} /> : null}
         </div>
         {subQ === "ems_subtype" && probs?.ems_symptom && labels?.ems_symptom ? (
           <div className="drow"><span className="dlabel">주증상</span>
-            <Chips dist={probs.ems_symptom} labels={labels.ems_symptom} commit={model.commits.symptom} threshold={THRESHOLD.symptom} />
+            <Chips dist={probs.ems_symptom} labels={labels.ems_symptom} commit={model.commits.symptom} threshold={threshold("ems_symptom")} />
           </div>
         ) : null}
       </div>
@@ -193,8 +149,9 @@ export default function CompareView({ scenarios }: { scenarios: ScenarioSummary[
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const zoroRef = useRef(zoro);
-  zoroRef.current = zoro;
   const runId = useRef(0);
+  const inFlight = useRef(false);
+  useEffect(() => () => { runId.current += 1; }, []);
 
   useEffect(() => {
     if (!scenarioId && scenarios.length) {
@@ -204,23 +161,31 @@ export default function CompareView({ scenarios }: { scenarios: ScenarioSummary[
 
   const reset = useCallback(() => {
     runId.current += 1;
+    inFlight.current = false;
     setPlaying(false); setShown([]); setTyping(""); setError(null); setBusy(false);
-    setZoro({ sft: emptyZoro(), base: emptyZoro() }); setLlm(emptyLlm());
+    zoroRef.current = { sft: emptyZoro(), base: emptyZoro() };
+    setZoro(zoroRef.current); setLlm(emptyLlm()); setLabels(null);
   }, []);
 
   useEffect(() => {
     if (!scenarioId) return;
     reset();
-    api.scenario(scenarioId).then(setScenario).catch((e) => setError(e instanceof ApiError ? e.message : "시나리오를 불러오지 못했습니다."));
+    setScenario(null);
+    let current = true;
+    api.scenario(scenarioId).then((data) => { if (current) setScenario(data); })
+      .catch((e) => { if (current) setError(e instanceof ApiError ? e.message : "시나리오를 불러오지 못했습니다."); });
+    return () => { current = false; };
   }, [scenarioId, reset]);
 
   const step = useCallback(async () => {
-    if (!scenario || busy || shown.length >= scenario.turns.length) return;
+    if (!scenario || inFlight.current || shown.length !== zoroRef.current.sft.turn || shown.length >= scenario.turns.length) return;
     const myRun = runId.current;
     const turn = scenario.turns[shown.length];
+    inFlight.current = true;
     setBusy(true); setError(null);
     const chunk = Math.max(1, Math.ceil(turn.text.length / 14));
     for (let i = chunk; i < turn.text.length + chunk; i += chunk) {
+      if (myRun !== runId.current) return;
       setTyping(turn.text.slice(0, i));
       await new Promise((r) => setTimeout(r, TYPE_MS / 14));
     }
@@ -229,39 +194,45 @@ export default function CompareView({ scenarios }: { scenarios: ScenarioSummary[
     const turns = [...shown.map(({ speaker, text }) => ({ speaker, text })), turn];
     const turnNo = turns.length;
     const entry: TurnLog = { ...turn, notes: {}, ms: {} };
-    setShown([...shown, entry]);
-    setLlm((s) => ({ ...s, pending: true }));
-    const zoroCall = api.streamDecide(turns).then((res) => {
+    try {
+      const res = await api.streamDecide(turns);
       if (myRun !== runId.current) return;
-      setLabels(res.labels);
       const next = { ...zoroRef.current };
       for (const id of ["sft", "base"] as ZoroId[]) {
         const r = res.results[id];
-        const { next: updated, note } = advance(next[id], r.probabilities, turnNo, res.labels);
+        const { next: updated, note, accepted } = advanceHarness(next[id], r.probabilities, { number: turnNo, speaker: turn.speaker }, res.harness, id);
+        if (!accepted) throw new ApiError(note);
         next[id] = { ...updated, latencies: [...next[id].latencies, r.latency_ms] };
         entry.notes[id] = note; entry.ms[id] = r.latency_ms;
       }
+      zoroRef.current = next;
       setZoro(next);
-      setShown((list) => list.map((t, i) => (i === turnNo - 1 ? { ...entry } : t)));
-      return res.labels;
-    });
-    try {
-      const resolvedLabels = await zoroCall;
+      setLabels(res.labels);
+      setShown([...shown, { ...entry }]);
+      setLlm((s) => ({ ...s, pending: true }));
       // Ask the LLM only after Zoro answered, so the two models never share the GPU during a timing.
-      const out = await api.streamLlm(turns);
-      if (myRun !== runId.current) return;
-      setLlm((s) => ({ answer: out.answer, raw: out.text, latencies: [...s.latencies, out.latency_ms], pending: false }));
-      if (resolvedLabels) entry.notes.llm = llmNote(out.answer, resolvedLabels);
-      entry.ms.llm = out.latency_ms;
+      try {
+        const out = await api.streamLlm(turns);
+        if (myRun !== runId.current) return;
+        setLlm((s) => ({ answer: out.answer, raw: out.text, latencies: [...s.latencies, out.latency_ms], pending: false }));
+        entry.notes.llm = llmNote(out.answer, res.labels); entry.ms.llm = out.latency_ms;
+      } catch {
+        if (myRun !== runId.current) return;
+        setLlm((s) => ({ ...s, pending: false }));
+        entry.notes.llm = "생성 응답을 확인할 수 없습니다.";
+      }
       setShown((list) => list.map((t, i) => (i === turnNo - 1 ? { ...entry } : t)));
     } catch (e) {
-      setLlm((s) => ({ ...s, pending: false }));
-      setError(e instanceof ApiError ? e.message : "판단 요청에 실패했습니다.");
+      if (myRun !== runId.current) return;
+      zoroRef.current = { sft: suspendHarness(zoroRef.current.sft), base: suspendHarness(zoroRef.current.base) };
+      setZoro(zoroRef.current);
+      const message = e instanceof ApiError ? e.message : "판단 요청에 실패했습니다.";
+      setError(`${message.startsWith("WAIT") ? message : `WAIT · ${turnNo}턴 ${message}`} 같은 턴을 다시 시도할 수 있습니다.`);
       setPlaying(false);
     } finally {
-      if (myRun === runId.current) setBusy(false);
+      if (myRun === runId.current) { inFlight.current = false; setBusy(false); }
     }
-  }, [scenario, busy, shown]);
+  }, [scenario, shown]);
 
   const done = !!scenario && shown.length >= scenario.turns.length && !busy;
   useEffect(() => {
@@ -272,6 +243,7 @@ export default function CompareView({ scenarios }: { scenarios: ScenarioSummary[
   }, [playing, busy, done, step, shown.length]);
 
   const finalOf = (id: ZoroId) => {
+    if (zoro[id].reviewTurn !== null) return `재검토 (${zoro[id].reviewTurn}턴)`;
     const c = zoro[id].commits;
     return [c.dispatch?.label, c.subtype?.label, c.urgency?.label].map((x) => x ?? "미확정").join(" · ");
   };
@@ -282,7 +254,7 @@ export default function CompareView({ scenarios }: { scenarios: ScenarioSummary[
       <div className="stream-bar">
         <label>
           통화
-          <select value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}>
+          <select value={scenarioId} onChange={(e) => { reset(); setScenario(null); setScenarioId(e.target.value); }}>
             {scenarios.map((s) => <option key={s.id} value={s.id}>{s.private ? "★ " : ""}{s.title}</option>)}
           </select>
         </label>
@@ -305,7 +277,7 @@ export default function CompareView({ scenarios }: { scenarios: ScenarioSummary[
                 <span className="who">{t.speaker === 0 ? "수보요원" : "신고자"}</span>
                 <p>{t.text}</p>
                 {t.notes.sft ? (
-                  <p className={`zoro-note ${t.notes.sft === "WAIT" ? "is-wait" : "is-commit"}`}>
+                  <p className={`zoro-note ${t.notes.sft.startsWith("COMMIT") ? "is-commit" : "is-wait"}`}>
                     <span className="zoro-tag">SENTINEL_ZORO</span>{t.notes.sft}
                     <span className="muted tabular"> {Math.round(t.ms.sft ?? 0)}ms</span>
                   </p>
@@ -338,24 +310,8 @@ export default function CompareView({ scenarios }: { scenarios: ScenarioSummary[
               </ul>
             </section>
           ) : null}
-          <section className="dev-precision" aria-label="dev 확정 정밀도">
-            <h3>확정하면 맞는가 — dev 실제 통화 {DEV_PRECISION.calls}건, 턴마다 같은 임계값 적용</h3>
-            <table>
-              <thead><tr><th scope="col">태스크</th><th scope="col">SENTINEL_ZORO 정밀도 (확정률)</th><th scope="col">Zoro · base 정밀도 (확정률)</th></tr></thead>
-              <tbody>
-                {DEV_PRECISION.rows.map((r) => (
-                  <tr key={r.task}>
-                    <th scope="row">{r.task}</th>
-                    <td className="tabular"><strong>{pct(r.sft[0])}</strong> ({pct(r.sft[1])})</td>
-                    <td className="tabular">{pct(r.base[0])} ({pct(r.base[1])})</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="muted">긴급도는 라벨 자체가 모호해 SENTINEL_ZORO가 대부분 WAIT로 남습니다. base는 확정하지만 3건 중 2건이 틀립니다.</p>
-          </section>
           <p className="muted stream-foot">
-            Zoro 칩의 밝기는 모델 확률이고, 확정 기준은 dev에서 정한 임계값(출동유형 {THRESHOLD.dispatch * 100}%, 세부유형·긴급도 {THRESHOLD.urgency * 100}%)입니다.
+            Zoro 칩의 밝기는 모델 확률입니다. 확정 후보와 적용 기준은 서버의 판단 정책에서 가져옵니다.
             세부유형·긴급도는 출동유형 확정 후에만 확정합니다. Qwen은 같은 대화를 보고 JSON을 생성하며, 매 턴의 답을 그대로 표시합니다.
             응답 시간은 GPU 서버의 모델 계산 시간입니다.
           </p>

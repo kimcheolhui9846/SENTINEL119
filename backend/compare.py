@@ -14,6 +14,8 @@ from typing import Annotated, Literal
 import httpx
 
 from .call_area import find_area
+from .demo_harness import apply_harness, load_profile, parse_json
+from .inference import InferenceError
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -68,7 +70,13 @@ def _relay(path, body, timeout):
         raise HTTPException(502, "compare_unavailable") from None
     if response.status_code != 200:
         raise HTTPException(502, "compare_unavailable")
-    return response.json()
+    try:
+        value = parse_json(response.content)
+        # The original payload is relayed, including metadata the harness does not read.
+        json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (ValueError, RecursionError):
+        raise HTTPException(502, "compare_unavailable") from None
+    return value
 
 
 router = APIRouter(prefix="/api/compare")
@@ -91,7 +99,17 @@ def compare_call(scenario_id: str):
 
 @router.post("/decide")
 def compare_decide(body: CompareRequest):
-    return _relay("/v1/stream", {"turns": body.model_dump()["turns"], "variants": ["sft", "base"]}, 10.0)
+    try:
+        profile = load_profile()
+    except ValueError:
+        raise HTTPException(503, "compare_unconfigured") from None
+    turns = body.model_dump()["turns"]
+    response = _relay("/v1/stream", {"turns": turns, "variants": ["sft", "base"]}, 10.0)
+    try:
+        harness = apply_harness(turns, response, profile)
+    except InferenceError:
+        raise HTTPException(502, "compare_unavailable") from None
+    return {**response, "harness": harness}
 
 
 @router.post("/llm")
