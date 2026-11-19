@@ -410,10 +410,10 @@ async def transfer(body: TransferRequest):
             reason, reasoned = await asyncio.gather(explain(turns, rule, hospitals, choice),
                                                     zoro_reason(turns, rule, hospitals, choice["question"]),
                                                     return_exceptions=True)
-        if isinstance(reason, Exception):
-            raise reason
-        if isinstance(reasoned, Exception):
-            reasoned = None
+            if isinstance(reason, Exception):
+                raise reason
+            if isinstance(reasoned, Exception):
+                reasoned = None
         else:
             reason, reasoned = await explain(turns, rule, hospitals, choice), None
         reason["reasoned"] = reasoned
