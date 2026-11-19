@@ -175,6 +175,15 @@ def stored_patrols():
 router = APIRouter(prefix="/api/map")
 
 
+@router.get("/locate")
+def get_locate(lat: float, lon: float):
+    from .call_area import locate
+    area = locate(lat, lon)
+    if area is None:
+        raise HTTPException(404, "outside_seoul")
+    return area
+
+
 @router.get("/patrols")
 async def get_patrols():
     return {"patrols": stored_patrols(), "note": "시연용 순찰 경로 (실제 차량 위치 아님)"}

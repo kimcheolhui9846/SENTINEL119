@@ -132,3 +132,10 @@
 .map-banner-detail .hl-need { color: var(--mint); font-weight: 800; }
 .map-banner-detail .hl-sep { color: #6f8797; margin: 0 2px; }
 .map-banner-detail .hl-unit { color: var(--mint); font-weight: 800; font-size: 18px; }
+/* Free-input mode */
+.live-hint { font-size: 15px; font-weight: 700; color: var(--amber); }
+.live-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 8px; }
+.live-form textarea { resize: vertical; padding: 8px 10px; border-radius: var(--radius); border: 1px solid var(--line-strong);
+  background: var(--field); color: var(--text); font: inherit; font-size: 15px; }
+.live-form textarea:disabled { opacity: 0.6; }
+.dispatch-map.leaflet-container { cursor: grab; }

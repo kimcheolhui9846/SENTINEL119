@@ -63,10 +63,13 @@ function hospitalIcon(chosen: boolean) {
   });
 }
 
-function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfer }: {
+function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfer, onPick }: {
   fleet: FleetUnit[]; area: ScenarioDetail['area'] | null; orders: Order[]; patrols: Patrol[];
   positions: React.MutableRefObject<Record<string, Point>>; overlay?: React.ReactNode; transfer: TransferResponse | null;
+  onPick?: (p: Point) => void;
 }) {
+  const pick = useRef(onPick);
+  pick.current = onPick;
   const element = useRef<HTMLDivElement>(null);
   const state = useRef<{ map: L.Map; markers: Map<string, L.Marker>; incident?: L.LayerGroup; routes: L.LayerGroup;
     moving: Map<string, Moving>; patrol: Map<string, Moving> } | null>(null);
@@ -87,6 +90,7 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfe
       }
     }).catch(() => {});
     const routes = L.layerGroup().addTo(map);
+    map.on('click', (event: L.LeafletMouseEvent) => pick.current?.({ lat: event.latlng.lat, lon: event.latlng.lng }));
     state.current = { map, markers: new Map(), routes, moving: new Map(), patrol: new Map() };
     let frame = 0;
     const render = (now: number) => {
@@ -176,7 +180,7 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfe
       .bindTooltip(`신고 위치 · ${area.district} ${area.dong}`, { permanent: true, direction: 'top', offset: [0, -20] })
       .addTo(group);
     s.incident = group;
-    s.map.flyTo(latLng(area.center), 14.5, { duration: 1.2 });
+    s.map.flyTo(latLng(area.center), Math.max(s.map.getZoom(), 14), { duration: 1.0 });
   }, [area]);
 
   // Each new order draws its road route and drives the unit along it.
@@ -236,8 +240,27 @@ function Countdown({ order, now }: { order: Order; now: number }) {
   return <span className="tabular">{left > 0 ? `도착까지 ${Math.floor(left / 60)}분 ${Math.round(left % 60)}초` : '현장 도착'}</span>;
 }
 
-export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
-  const [callId, setCallId] = useState(calls.find((c) => c.area)?.id ?? calls[0]?.id ?? '');
+// Free-input mode: a scripted virtual dispatcher asks for what SENTINEL_ZORO has not committed yet.
+function dispatcherReply(c: ZoroState['commits'], asked: Set<string>) {
+  const ask = (key: string, text: string) => (asked.has(key) ? null : (asked.add(key), text));
+  if (!c.dispatch) return ask('what', '네, 어떤 상황인지 조금 더 자세히 말씀해 주세요. 다치거나 아픈 분이 있나요?')
+    ?? ask('what2', '지금 눈앞에 보이는 상황을 그대로 말씀해 주세요.') ?? '네, 계속 말씀해 주세요.';
+  if (c.dispatch.label === '화재') return ask('fire', '불이 어디에서 나고 있나요? 안에 남아 있는 사람이 있나요? 먼저 안전한 곳으로 대피하세요.')
+    ?? '소방차가 출동했습니다. 안전한 곳에서 기다려 주세요.';
+  if (c.dispatch.label === '구조') return ask('rescue', '갇히거나 다친 분이 있나요? 정확히 어떤 상황인가요?')
+    ?? (!c.urgency ? ask('rescue-u', '그분 상태는 어떤가요? 의식이 있고 말을 하나요?') : null) ?? '구조대가 출동했습니다. 위험한 곳에 가까이 가지 마세요.';
+  if (c.dispatch.label === '기타') return ask('other', '확인했습니다. 담당 기관으로 안내해 드리겠습니다.') ?? '네, 말씀하세요.';
+  if (!c.subtype) return ask('ems-what', '구급차 보내드리겠습니다. 환자분 어디가 어떻게 불편하신가요? 언제부터 그러셨어요?')
+    ?? ask('ems-what2', '다치신 건가요, 아니면 갑자기 아프신 건가요?') ?? '네, 계속 말씀해 주세요.';
+  if (!c.urgency) return ask('ems-u', '지금 의식은 있으세요? 숨은 잘 쉬시나요?') ?? ask('ems-u2', '상태가 점점 나빠지고 있나요?') ?? '네, 상태 계속 지켜봐 주세요.';
+  if (!c.symptom) return ask('ems-s', '가장 불편한 증상이 무엇인지 하나만 말씀해 주세요.') ?? '구급차가 가고 있습니다. 전화 끊지 말고 기다려 주세요.';
+  return ask('ems-done', '구급차가 가고 있습니다. 환자 곁에서 전화 끊지 말고 기다려 주세요.') ?? '네, 구급대원이 곧 도착합니다.';
+}
+
+export default function DispatchView({ calls, live = false }: { calls: CompareScenario[]; live?: boolean }) {
+  const [callId, setCallId] = useState(live ? '' : calls.find((c) => c.area)?.id ?? calls[0]?.id ?? '');
+  const [draft, setDraft] = useState('');
+  const asked = useRef(new Set<string>());
   const [call, setCall] = useState<ScenarioDetail | null>(null);
   const [fleet, setFleet] = useState<FleetUnit[]>([]);
   const [lines, setLines] = useState<Line[]>([]);
@@ -271,11 +294,12 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
 
   const reset = useCallback(() => {
     run.current += 1; sentKey.current = ''; transferKey.current = ''; setTransfer(null); setTransferSymptom(null);
+    asked.current = new Set();
     setPlaying(false); setBusy(false); setLines([]); setSft(emptyZoro()); setBase(emptyZoro()); setOrders([]);
     setError(null); setShowGold(false);
   }, []);
   useEffect(() => {
-    if (!callId) return;
+    if (!callId || live) return;
     reset();
     api.scenario(callId).then(setCall).catch(() => setError('통화를 불러오지 못했습니다.'));
   }, [callId, reset]);
@@ -322,15 +346,13 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
     } catch { /* the dispatch view keeps working without hospital data */ }
   }, [call]);
 
-  const step = useCallback(async () => {
-    if (!call || busy || lines.length >= call.turns.length) return;
+  // One turn: append it, let both Zoro heads judge the whole prefix, then dispatch / transfer as needed.
+  const judge = useCallback(async (turns: { speaker: 0 | 1; text: string }[]) => {
     const myRun = run.current;
-    const turns = [...lines.map(({ speaker, text }) => ({ speaker, text })), call.turns[lines.length]];
-    setLines((l) => [...l, { ...call.turns[lines.length] }]);
-    setBusy(true); setError(null);
+    setLines((l) => [...l, { ...turns[turns.length - 1] }]);
     try {
       const res = await api.streamDecide(turns);
-      if (myRun !== run.current) return;
+      if (myRun !== run.current) return null;
       setLabels(res.labels);
       const s = advance(zoro.current.sft, res.results.sft.probabilities, turns.length, res.labels);
       const b = advance(zoro.current.base, res.results.base.probabilities, turns.length, res.labels);
@@ -339,16 +361,54 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
       setBase({ ...b.next, latencies: [...zoro.current.base.latencies, res.results.base.latency_ms] });
       setLines((l) => l.map((line, i) => (i === turns.length - 1
         ? { ...line, note: s.note, base: b.note, ms: res.results.sft.latency_ms } : line)));
+      zoro.current = { ...zoro.current, sft: nextSft };
       await syncDispatch(nextSft, turns.length);
       void syncTransfer(nextSft, turns, res.labels);
+      return nextSft;
     } catch {
       if (myRun === run.current) { setError('모델 서버 응답이 없습니다. 연결을 확인하세요.'); setPlaying(false); }
-    } finally {
-      if (myRun === run.current) setBusy(false);
+      return null;
     }
-  }, [call, busy, lines, syncDispatch, syncTransfer]);
+  }, [syncDispatch, syncTransfer]);
 
-  const done = !!call && lines.length >= call.turns.length && !busy;
+  const step = useCallback(async () => {
+    if (!call || busy || lines.length >= call.turns.length) return;
+    const myRun = run.current;
+    setBusy(true); setError(null);
+    await judge([...lines.map(({ speaker, text }) => ({ speaker, text })), call.turns[lines.length]]);
+    if (myRun === run.current) setBusy(false);
+  }, [call, busy, lines, judge]);
+
+  // Free input: pick a point on the map (before the first caller message), then talk as the caller.
+  const pickPoint = useCallback(async (p: Point) => {
+    if (!live || lines.some((l) => l.speaker === 1)) return;
+    try {
+      const area = await dispatchApi.locate(p);
+      reset();
+      setCall({ id: 'live', title: '직접 입력', summary: '', private: false, gold: null, turns: [], area });
+      setBusy(true);
+      await judge([{ speaker: 0, text: '119입니다. 무슨 일이세요?' }]);
+      setBusy(false);
+    } catch {
+      setError('서울 안의 지점을 선택하세요.');
+    }
+  }, [live, lines, reset, judge]);
+
+  const send = useCallback(async () => {
+    const text = draft.trim();
+    if (!live || !call?.area || busy || !text) return;
+    const myRun = run.current;
+    setDraft(''); setBusy(true); setError(null);
+    const history = lines.map(({ speaker, text: t }) => ({ speaker, text: t }));
+    const afterCaller = await judge([...history, { speaker: 1, text }]);
+    if (afterCaller && myRun === run.current) {
+      await new Promise((r) => setTimeout(r, 500));
+      await judge([...history, { speaker: 1, text }, { speaker: 0, text: dispatcherReply(afterCaller.commits, asked.current) }]);
+    }
+    if (myRun === run.current) setBusy(false);
+  }, [live, call, busy, draft, lines, judge]);
+
+  const done = !live && !!call && lines.length >= call.turns.length && !busy;
   useEffect(() => {
     if (!playing || busy) return;
     if (done) { setPlaying(false); setShowGold(true); return; }
@@ -435,21 +495,31 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
 
   return (
     <div className="dispatch">
+      {live ? (
+        <div className="dispatch-bar">
+          <span className="live-hint">{!call?.area ? '① 서울 지도에서 신고 위치를 클릭하세요.'
+            : lines.some((l) => l.speaker === 1) ? `신고 위치 · ${call.area.district} ${call.area.dong} · 신고자로 대화를 이어 가세요.`
+            : `신고 위치 · ${call.area.district} ${call.area.dong} (다른 곳을 클릭하면 위치 변경) · ② 아래에 신고 내용을 입력하세요.`}</span>
+          <button type="button" className="button secondary" onClick={() => { reset(); setCall(null); }}>새 신고</button>
+          <span className="meta">가상 수보요원의 질문은 Zoro가 아직 확정하지 못한 항목을 묻는 정해진 문장입니다.</span>
+        </div>
+      ) : (
       <div className="dispatch-bar">
-        <label>시연 통화
-          <select value={callId} onChange={(e) => setCallId(e.target.value)}>
-            {calls.map((s) => <option key={s.id} value={s.id}>{s.private ? '★ ' : ''}{s.title}</option>)}
-          </select>
-        </label>
-        <button type="button" className="button primary" disabled={!call || done} onClick={() => setPlaying((p) => !p)}>{playing ? '멈춤' : '재생'}</button>
-        <button type="button" className="button secondary" disabled={!call || busy || playing || done} onClick={() => void step()}>다음 발화</button>
-        <button type="button" className="button secondary" onClick={reset}>처음부터</button>
-        <span className="meta">{call?.private ? '실제 통화 · AI Hub Validation(학습 미사용) · 로컬 시연 전용' : '가상 통화'}</span>
-      </div>
+          <label>시연 통화
+            <select value={callId} onChange={(e) => setCallId(e.target.value)}>
+              {calls.map((s) => <option key={s.id} value={s.id}>{s.private ? '★ ' : ''}{s.title}</option>)}
+            </select>
+          </label>
+          <button type="button" className="button primary" disabled={!call || done} onClick={() => setPlaying((p) => !p)}>{playing ? '멈춤' : '재생'}</button>
+          <button type="button" className="button secondary" disabled={!call || busy || playing || done} onClick={() => void step()}>다음 발화</button>
+          <button type="button" className="button secondary" onClick={reset}>처음부터</button>
+          <span className="meta">{call?.private ? '실제 통화 · AI Hub Validation(학습 미사용) · 로컬 시연 전용' : '가상 통화'}</span>
+        </div>
+      )}
       {error ? <div className="alert" role="alert">{error}</div> : null}
       <div className="dispatch-grid">
         <DispatchMap fleet={fleet} area={lines.length ? call?.area ?? null : null} orders={orders} patrols={patrols}
-          positions={positions} overlay={overlay} transfer={transfer} />
+          positions={positions} overlay={overlay} transfer={transfer} onPick={live ? (p) => void pickPoint(p) : undefined} />
         <aside className="dispatch-side">
           <section className="panel dispatch-card">
             <header className="panel-header"><h2 className="section-title">SENTINEL_ZORO 판단</h2>
@@ -476,7 +546,7 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
       <div className="dispatch-bottom">
           <section className="panel dispatch-card dispatch-transcript">
             <header className="panel-header"><h2 className="section-title">신고 통화</h2>
-              <span className="meta tabular">{lines.length} / {call?.turns.length ?? 0}턴</span></header>
+              <span className="meta tabular">{live ? `${lines.length}턴` : `${lines.length} / ${call?.turns.length ?? 0}턴`}</span></header>
             <ol ref={transcript}>
               {lines.map((line, i) => (
                 <li key={i} data-speaker={line.speaker}>
@@ -485,8 +555,18 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
                   {line.note ? <span className={`dt-note ${line.note === 'WAIT' ? 'is-wait' : 'is-commit'}`}>{line.note}</span> : null}
                 </li>
               ))}
-              {!lines.length ? <li className="meta">재생을 누르면 통화가 한 턴씩 들어오고, 턴마다 SENTINEL_ZORO가 판단합니다.</li> : null}
+              {!lines.length ? <li className="meta">{live ? '지도에서 위치를 고르면 119 수보요원이 전화를 받습니다.'
+                : '재생을 누르면 통화가 한 턴씩 들어오고, 턴마다 SENTINEL_ZORO가 판단합니다.'}</li> : null}
             </ol>
+            {live ? (
+              <form className="live-form" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+                <textarea rows={2} maxLength={2000} value={draft} disabled={!call?.area}
+                  placeholder={call?.area ? '신고자로 입력 (Enter 전송, Shift+Enter 줄바꿈) · 예: 아버지가 갑자기 쓰러지셨어요' : '먼저 지도에서 위치를 클릭하세요'}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }} />
+                <button type="submit" className="button primary" disabled={!call?.area || busy || !draft.trim()}>{busy ? '판단 중…' : '보내기'}</button>
+              </form>
+            ) : null}
           </section>
           <section className="panel dispatch-card dispatch-transfer">
             <header className="panel-header"><h2 className="section-title">이송 병원</h2>

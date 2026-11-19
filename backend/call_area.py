@@ -67,6 +67,18 @@ def find_area(address, seed=None):
             "source": "AI Hub 71768 address · JUSO 2015 법정동 경계 (southkorea/seoul-maps, Apache-2.0)"}
 
 
+def locate(lat, lon):
+    """Clicked map point -> area dict with that point as the incident, or None outside Seoul."""
+    for (district, dong), feature in _dongs().items():
+        geometry = feature["geometry"]
+        polygons = [geometry["coordinates"]] if geometry["type"] == "Polygon" else geometry["coordinates"]
+        if any(_inside(lon, lat, poly[0]) for poly in polygons):
+            area = find_area(f"서울특별시 {district} {dong}")
+            return {**area, "center": {"lat": round(lat, 6), "lon": round(lon, 6)}, "random_point": False,
+                    "precision": "지도에서 지정"}
+    return None
+
+
 def _offset(center, bearing_deg, km):
     lat = center["lat"] + km * math.cos(math.radians(bearing_deg)) / _KM_PER_DEG_LAT
     lon = center["lon"] + km * math.sin(math.radians(bearing_deg)) / (

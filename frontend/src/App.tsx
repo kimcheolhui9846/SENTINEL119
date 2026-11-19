@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import CompareView from './CompareView';
 import DispatchView from './DispatchView';
-import Playground from './Playground';
 import { api as compareApi } from './compareApi';
 import type { CompareScenario } from './compareApi';
 import './styles.css';
@@ -59,7 +58,7 @@ export default function App() {
             : <p className="empty-state">비교할 통화가 없습니다. SENTINEL_SCENARIO_DIRS를 설정하세요.</p>)}
         </div>
         <div id="page-play" role="tabpanel" aria-labelledby="tab-play" hidden={page !== 'play'}>
-          {page === 'play' && <Playground />}
+          {page === 'play' && <DispatchView calls={[]} live />}
         </div>
       </main>
     </div>

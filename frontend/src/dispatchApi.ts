@@ -43,5 +43,6 @@ export const dispatchApi = {
     urgency?: string | null; busy: string[]; skip: number; positions?: Record<string, Point> }) => call<DispatchResponse>('/dispatch', body),
   transfer: (body: { lat: number; lon: number; turns: { speaker: 0 | 1; text: string }[]; subtype?: string | null;
     symptom?: string | null; urgency?: string | null }) => call<TransferResponse>('/transfer', body),
+  locate: (p: Point) => call<CallArea>(`/locate?lat=${p.lat}&lon=${p.lon}`),
   patrols: () => call<{ patrols: Patrol[]; note: string }>('/patrols'),
 };
