@@ -121,3 +121,6 @@
 .transfer-list li[data-chosen="true"] strong { color: var(--mint); }
 .transfer-list .prob-track { height: 8px; }
 .transfer-list p { margin: 0; font-size: 13px; }
+.transfer-basis { margin: 0; font-size: 13px; font-weight: 700; }
+.transfer-basis.is-wait { color: var(--amber); }
+.transfer-basis.is-commit { color: var(--mint); }

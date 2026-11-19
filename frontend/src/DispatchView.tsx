@@ -252,6 +252,8 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
   const [patrols, setPatrols] = useState<Patrol[]>([]);
   const [labels, setLabels] = useState<Labels | null>(null);
   const [transfer, setTransfer] = useState<TransferResponse | null>(null);
+  // Urgency the transfer rule used: committed, or the current top estimate while urgency is still WAIT.
+  const [transferUrgency, setTransferUrgency] = useState<{ label: string; p: number; committed: boolean } | null>(null);
   const transferKey = useRef('');
   const positions = useRef<Record<string, Point>>({});
   const run = useRef(0);
@@ -268,7 +270,7 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
   useEffect(() => { const id = window.setInterval(() => setNow(performance.now()), 500); return () => window.clearInterval(id); }, []);
 
   const reset = useCallback(() => {
-    run.current += 1; sentKey.current = ''; transferKey.current = ''; setTransfer(null);
+    run.current += 1; sentKey.current = ''; transferKey.current = ''; setTransfer(null); setTransferUrgency(null);
     setPlaying(false); setBusy(false); setLines([]); setSft(emptyZoro()); setBase(emptyZoro()); setOrders([]);
     setError(null); setShowGold(false);
   }, []);
@@ -300,18 +302,23 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
     ]);
   }, [call]);
 
-  // EMS only: once urgency is committed, pick the transfer hospital (KB rule + NMC live beds + Zoro choice).
-  const syncTransfer = useCallback(async (state: ZoroState, turns: { speaker: 0 | 1; text: string }[]) => {
+  // EMS only: as soon as 구급 is committed, pick the transfer hospital (KB rule + NMC live beds + Zoro choice).
+  // Until urgency commits the rule uses its current top estimate, and refreshes when that estimate changes.
+  const syncTransfer = useCallback(async (state: ZoroState, turns: { speaker: 0 | 1; text: string }[], labels: Labels) => {
     const c = state.commits;
-    if (c.dispatch?.label !== '구급' || !c.urgency || !call?.area) return;
-    const key = [c.subtype?.label, c.symptom?.label, c.urgency.label].join('|');
+    if (c.dispatch?.label !== '구급' || !call?.area) return;
+    const dist = state.probs?.urgency;
+    const top = dist ? Object.entries(dist).sort((a, b) => b[1] - a[1])[0] : undefined;
+    const urgency = c.urgency ? { label: c.urgency.label, p: c.urgency.p, committed: true }
+      : top ? { label: labels.urgency?.[top[0]] ?? top[0], p: top[1], committed: false } : null;
+    const key = [c.subtype?.label, c.symptom?.label, urgency?.label, urgency?.committed].join('|');
     if (key === transferKey.current) return;
     transferKey.current = key;
     const myRun = run.current;
     try {
       const res = await dispatchApi.transfer({ ...call.area.center, turns, subtype: c.subtype?.label,
-        symptom: c.symptom?.label, urgency: c.urgency.label });
-      if (myRun === run.current) setTransfer(res);
+        symptom: c.symptom?.label, urgency: urgency?.label });
+      if (myRun === run.current) { setTransfer(res); setTransferUrgency(urgency); }
     } catch { /* the dispatch view keeps working without hospital data */ }
   }, [call]);
 
@@ -333,7 +340,7 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
       setLines((l) => l.map((line, i) => (i === turns.length - 1
         ? { ...line, note: s.note, base: b.note, ms: res.results.sft.latency_ms } : line)));
       await syncDispatch(nextSft, turns.length);
-      void syncTransfer(nextSft, turns);
+      void syncTransfer(nextSft, turns, res.labels);
     } catch {
       if (myRun === run.current) { setError('모델 서버 응답이 없습니다. 연결을 확인하세요.'); setPlaying(false); }
     } finally {
@@ -480,11 +487,14 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
           <section className="panel dispatch-card dispatch-transfer">
             <header className="panel-header"><h2 className="section-title">이송 병원</h2>
               <span className="meta">{transfer?.zoro?.latency_ms ? `Zoro ${Math.round(transfer.zoro.latency_ms)}ms` : ''}</span></header>
-            {!transfer ? <p className="meta">구급 출동에서 긴급도가 확정되면, 지침 기준과 응급실 실시간 병상으로 후보를 고르고 Zoro가 이송 병원을 선택합니다.</p>
+            {!transfer ? <p className="meta">구급으로 확정되면 지침 기준과 응급실 실시간 병상으로 후보를 고르고 Zoro가 이송 병원을 선택합니다.</p>
               : transfer.status === 'unconfigured' ? <p className="meta">국립중앙의료원 API 키(NMC_SERVICE_KEY)가 설정되지 않아 병원 정보를 가져오지 못했습니다.</p>
               : transfer.status === 'unavailable' ? <p className="meta">국립중앙의료원 API 응답이 없습니다. 잠시 뒤 다시 시도합니다.</p> : (
               <>
                 <p className="transfer-rule"><strong>{transfer.rule.category}</strong> · {transfer.rule.text}</p>
+                {transferUrgency ? <p className={`transfer-basis ${transferUrgency.committed ? 'is-commit' : 'is-wait'}`}>
+                  {transferUrgency.committed ? `긴급도 ${transferUrgency.label} 확정 기준`
+                    : `긴급도 미확정 · 현재 추정 ${transferUrgency.label} ${Math.round(transferUrgency.p * 100)}% 기준 (확정되면 다시 계산)`}</p> : null}
                 <p className="do-source">근거: {transfer.rule.source}</p>
                 {!transfer.hospitals.length ? <p className="meta">기준에 맞고 응급실 병상이 있는 병원이 주변에 없습니다.</p> : (
                   <ol className="transfer-list">
