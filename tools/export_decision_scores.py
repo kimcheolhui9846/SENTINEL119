@@ -10,7 +10,7 @@ import torch
 from sentinel119.decision import encode
 from sentinel119.model import load_zoro, same_base
 from sentinel119.prompts import VARIANTS, apply as apply_prompt
-from sentinel119.train import evaluation_split, filter_examples, resolve_prompt
+from sentinel119.train import checkpoint_questions, evaluation_split, filter_examples, resolve_prompt, select_questions
 
 
 def main():
@@ -42,7 +42,9 @@ def main():
         checkpoint_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
     examples, manifest = evaluation_split(args.data, args.split, prior, args.reference_data)
     prompt = resolve_prompt(args.prompt_variant, args.guideline_dir, prior)
-    examples = [apply_prompt(e, prompt) for e in examples]
+    # Same question set as the checkpoint's training and independent evaluation.
+    keep = checkpoint_questions(None, prior)
+    examples = [select_questions(apply_prompt(e, prompt), keep) for e in examples]
     model, tokenizer, identity = load_zoro(local_files_only=True, **kwargs)
     if args.checkpoint and not same_base(prior["model"], identity):
         raise ValueError("Base model identity mismatch")
@@ -57,6 +59,7 @@ def main():
                 row["qid"]: dict(zip(row["keys"], z.float().tolist(), strict=True))
                 for row, z in zip(rows, logits, strict=True)}})
     result = {"model": identity, "checkpoint_sha256": checkpoint_hashes, "coverage": coverage, "prompt": prompt,
+              "questions": sorted(keep) if keep else None,
               "split": args.split, "data_sha256": manifest["splits"][args.split]["sha256"], "scores": scores}
     args.output.parent.mkdir(exist_ok=True, parents=True)
     with args.output.open("x", encoding="utf-8") as handle:

@@ -149,7 +149,7 @@ def prepare_hierarchy(data_root, eval_data, output, train_count=8000, seed=219, 
         payload = (eval_data / f"{name}.jsonl").read_bytes()
         if hashlib.sha256(payload).hexdigest() != eval_manifest["splits"][name]["sha256"]:
             raise ValueError(f"{name}.jsonl does not match its manifest")
-        reserved_rows[name] = [json.loads(line) for line in payload.decode("utf-8").splitlines() if line.strip()]
+        reserved_rows[name] = [json.loads(line) for line in payload.decode("utf-8").split("\n") if line.strip()]
     reserved = {k: {r["_meta"][k] for rows in reserved_rows.values() for r in rows}
                 for k in ("group_id", "record_id", "content_hash")}
 

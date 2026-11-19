@@ -105,7 +105,8 @@ def test_schedule_selection_and_oversampling():
     assert learning_rate_scale(1, 10) == 1.0
     assert learning_rate_scale(1, 10, 0.2, "cosine") == pytest.approx(0.5)
     assert learning_rate_scale(2, 10, 0.2, "cosine") == pytest.approx(1.0)
-    assert learning_rate_scale(10, 10, 0.2, "cosine") == pytest.approx(0.0, abs=1e-12)
+    assert 0 < learning_rate_scale(10, 10, 0.2, "cosine") < 0.1  # last step decays but still updates
+    assert learning_rate_scale(1, 1, 0.0, "cosine") == 1.0  # a single cosine step must not have zero LR
     metrics = lambda f1, down, nll: {"mean_nll": nll, "dispatch": {"macro_f1": f1}, "urgency":
                                      {"macro_f1": f1, "downward_error_rate": down}}
     good, risky = metrics(0.6, 0.1, 0.9), metrics(0.8, 0.4, 0.5)
@@ -169,7 +170,7 @@ def test_cli_prompt_objective_and_checkpoint_prompt_reuse(tmp_path, monkeypatch,
     assert trained["result"]["selection"]["rule"] == "composite"
     assert sorted(p.name for p in (fit_dir / "checkpoints").iterdir()) == ["step-1", "step-2", "step-3"]
     history = [json.loads(line) for line in (fit_dir / "history.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert [round(e["lr_scale"], 6) for e in history] == [1.0, 0.5, 0.0]
+    assert [round(e["lr_scale"], 6) for e in history] == [1.0, 1.0, 0.5]
     monkeypatch.setattr(sys, "argv", common + ["--output", str(eval_dir), "--evaluate-only", "test",
         "--checkpoint", str(fit_dir)])
     main()

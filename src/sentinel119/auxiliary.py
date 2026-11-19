@@ -69,7 +69,7 @@ def augment(data_root, data, output, parent=None):
         payload = source.read_bytes()
         if hashlib.sha256(payload).hexdigest() != entry["sha256"]:
             raise ValueError(f"{name}.jsonl does not match its manifest")
-        rows = [json.loads(line) for line in payload.decode("utf-8").splitlines() if line.strip()]
+        rows = [json.loads(line) for line in payload.decode("utf-8").split("\n") if line.strip()]
         by_archive = {}
         for row in rows:
             by_archive.setdefault(row["_meta"]["source"]["archive"], []).append(row)

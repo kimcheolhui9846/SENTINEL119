@@ -12,6 +12,7 @@ for one later application to a held-out split (``--apply``).
 """
 
 import argparse
+import hashlib
 from itertools import product
 import json
 from pathlib import Path
@@ -43,17 +44,32 @@ def metrics(truth, pred, labels):
     return out
 
 
+def identity(scores):
+    """What a policy was fitted on: base model, checkpoint files, prompt and question set."""
+    model = scores.get("model") or {}
+    return {"model": {k: model.get(k) for k in ("model_id", "revision", "config_sha256", "base_head_sha256")},
+            "checkpoint_sha256": scores.get("checkpoint_sha256") or {}, "prompt": (scores.get("prompt") or {}).get("variant"),
+            "questions": scores.get("questions")}
+
+
 def load(data, split, scores_path):
+    payload = (data / f"{split}.jsonl").read_bytes()
     rows = {}
-    for line in (data / f"{split}.jsonl").read_text(encoding="utf-8").splitlines():
+    for line in payload.decode("utf-8").split("\n"):  # not splitlines(): U+2028 may occur inside strings
         if line.strip():
             e = json.loads(line)
             rows[e["_meta"]["group_id"]] = {q: v["label"] for q, v in e["questions"].items()}
     scores = json.loads(Path(scores_path).read_text(encoding="utf-8"))
+    if scores.get("split") != split:
+        raise ValueError(f"Scores are for split {scores.get('split')!r}, not {split!r}")
+    if scores.get("data_sha256") != hashlib.sha256(payload).hexdigest():
+        raise ValueError("Scores were exported from a different version of this split")
     ids = [s["group_id"] for s in scores["scores"]]
-    if set(ids) - set(rows):
-        raise ValueError("Scores contain calls missing from the split")
-    out = {"ids": ids}
+    if len(ids) != len(set(ids)):
+        raise ValueError("Scores contain duplicate calls")
+    if set(ids) != set(rows):
+        raise ValueError(f"Scores and split differ: {len(set(rows) - set(ids))} missing, {len(set(ids) - set(rows))} extra")
+    out = {"ids": ids, "identity": identity(scores)}
     for qid, labels in (("urgency", URGENCY), ("dispatch", DISPATCH)):
         out[qid] = (log_softmax(np.array([[s["logits"][qid][k] for k in labels] for s in scores["scores"]])),
                     np.array([labels.index(rows[i][qid]) for i in ids]))
@@ -117,15 +133,23 @@ def main():
     args = parser.parse_args()
     if args.output.exists():
         parser.error("Use a fresh output file")
+    if args.split == "test" and not args.apply:
+        parser.error("Tuning on the final test split is not allowed; tune on dev/confirm and pass --apply")
     data = load(args.data, args.split, args.scores)
+    policy = None
+    if args.apply:
+        policy = json.loads(args.apply.read_text(encoding="utf-8"))
+        if policy.get("identity") != data["identity"]:
+            parser.error("Policy was fitted on scores from a different model, checkpoint, prompt or question set")
     tasks = [t for t in ("urgency", "dispatch", "dispatch_from_subtype") if t in data]
-    report = {"split": args.split, "calls": len(data["ids"]), "scores": str(args.scores), "raw": {}, "tasks": {}}
+    report = {"split": args.split, "calls": len(data["ids"]), "scores": str(args.scores), "identity": data["identity"],
+              "raw": {}, "tasks": {}}
     for task in tasks:
         scores, truth = data[task]
         labels = URGENCY if task == "urgency" else DISPATCH
         report["raw"][task] = metrics(truth, decide(scores, np.zeros(len(labels))), labels)
         if args.apply:
-            offsets = json.loads(args.apply.read_text(encoding="utf-8"))["tasks"][task]["offsets"]
+            offsets = policy["tasks"][task]["offsets"]
             report["tasks"][task] = {"offsets": offsets, "applied": metrics(truth, decide(scores, offsets), labels)}
             continue
         cap = args.max_downward if task == "urgency" else None

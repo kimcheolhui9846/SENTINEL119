@@ -70,7 +70,8 @@ def read_examples(path, expected_hash=None):
     payload = path.read_bytes()
     if expected_hash and hashlib.sha256(payload).hexdigest() != expected_hash:
         raise ValueError(f"Dataset hash mismatch: {path.name}")
-    examples = [json.loads(line) for line in payload.decode("utf-8").splitlines() if line.strip()]
+    # Records end at "\n" only; str.splitlines() would also split at U+2028/U+2029 inside JSON strings.
+    examples = [json.loads(line) for line in payload.decode("utf-8").split("\n") if line.strip()]
     if not examples:
         raise ValueError(f"Empty dataset: {path.name}")
     for example in examples:

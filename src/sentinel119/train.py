@@ -174,7 +174,12 @@ def training_order(train, oversample, rng):
     """Index pool for one epoch; dispatch classes in ``oversample`` are repeated that many times."""
     order = []
     for i, example in enumerate(train):
-        order.extend([i] * int(oversample.get(example["questions"]["dispatch"]["label"], 1)))
+        repeat = 1
+        if oversample:  # only needs the dispatch label when oversampling is requested
+            if "dispatch" not in example["questions"]:
+                raise ValueError("--oversample needs the dispatch question in the training data")
+            repeat = int(oversample.get(example["questions"]["dispatch"]["label"], 1))
+        order.extend([i] * repeat)
     rng.shuffle(order)
     return order
 
@@ -185,7 +190,8 @@ def learning_rate_scale(step, max_steps, warmup_ratio=0.0, schedule="constant"):
         return step / warmup
     if schedule == "constant":
         return 1.0
-    progress = (step - warmup) / max(1, max_steps - warmup)
+    # First post-warmup step runs at the full rate; the last step stays above zero.
+    progress = (step - warmup - 1) / max(1, max_steps - warmup)
     return 0.5 * (1 + math.cos(math.pi * min(1.0, progress)))
 
 
@@ -313,6 +319,12 @@ def parse_task_weights(items):
     return out
 
 
+def checkpoint_questions(requested=None, prior=None):
+    """Question IDs to keep: explicit request, else what the checkpoint was trained on, else all (None)."""
+    chosen = requested or (prior or {}).get("config", {}).get("questions")
+    return {q.strip() for q in chosen.split(",") if q.strip()} if chosen else None
+
+
 def select_questions(example, keep):
     """Drop questions outside ``keep`` (None keeps all); labels and metadata are untouched."""
     if keep is None:
@@ -438,8 +450,7 @@ def main():
             metadata["mode"] = prior["mode"]
         prompt = resolve_prompt(args.prompt_variant, args.guideline_dir, prior)
         # A checkpoint is evaluated on the questions it was trained with unless --questions overrides it.
-        chosen = args.questions or (prior or {}).get("config", {}).get("questions")
-        keep = {q.strip() for q in chosen.split(",") if q.strip()} if chosen else None
+        keep = checkpoint_questions(args.questions, prior)
         metadata["prompt"] = prompt
         if args.evaluate_only:
             examples, manifest = evaluation_split(args.data, args.evaluate_only, prior, args.reference_data)
