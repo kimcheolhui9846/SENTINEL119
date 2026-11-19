@@ -75,10 +75,14 @@ def filter_examples(examples, tokenizer, max_length):
             kept.append(example)
     if not kept:
         raise ValueError("All calls exceed max_length; increase the budget without truncating full-call labels")
-    counts = {name: dict(Counter(e["questions"][name]["label"] for e in kept))
-              for name in kept[0]["questions"]}
-    missing = {name: sorted(set(q["criteria"]) - set(counts[name]))
-               for name, q in kept[0]["questions"].items()}
+    # Questions may be optional per call (e.g. subtypes only under their dispatch type).
+    criteria = {}
+    for e in kept:
+        for name, q in e["questions"].items():
+            criteria.setdefault(name, q["criteria"])
+    counts = {name: dict(Counter(e["questions"][name]["label"] for e in kept if name in e["questions"]))
+              for name in criteria}
+    missing = {name: sorted(set(c) - set(counts[name])) for name, c in criteria.items()}
     return kept, {"input_calls": len(examples), "used_calls": len(kept), "overflow_group_ids": rejected,
                   "used_labels": counts, "missing_labels": missing}
 
@@ -94,30 +98,53 @@ def subtype_dispatch(keys, probabilities):
     return max(totals, key=totals.get)
 
 
-def evaluate(model, examples, tokenizer, max_length, temperature=1.0):
+# Hierarchy: the subtype question that belongs under each dispatch type.
+SUBTYPE_OF = {"ems": "ems_subtype", "rescue": "rescue_subtype"}
+
+
+def evaluate(model, examples, tokenizer, max_length, temperature=1.0, calls_per_batch=1):
     import torch
     from .model import supervised_loss
     actual, predicted, labels = {}, {}, {}
     nll, aux_nll, derived = [], [], []
+    hierarchy = Counter()
     model.eval()
     with torch.no_grad():
-        for example in examples:
-            rows = encode(example, tokenizer, max_length)
-            logits = tuple(z / temperature for z in model(rows))
-            # mean_nll stays dispatch+urgency only, so selection matches checkpoints without auxiliary questions.
-            main = [(z, r) for z, r in zip(logits, rows) if r["qid"] in PRIMARY]
-            aux = [(z, r) for z, r in zip(logits, rows) if r["qid"] not in PRIMARY]
-            nll.append(float(supervised_loss(*zip(*main))) if main else float(supervised_loss(logits, rows)))
-            if aux:
-                aux_nll.append(float(supervised_loss(*zip(*aux))))
-            for row, z in zip(rows, logits):
-                name = row["qid"]
-                labels[name] = row["keys"]
-                actual.setdefault(name, []).append(row["keys"][row["label"]])
-                predicted.setdefault(name, []).append(row["keys"][int(z.argmax())])
-                if name == "subtype":
-                    derived.append(subtype_dispatch(row["keys"], torch.softmax(z.float(), -1).tolist()))
+        for start in range(0, len(examples), calls_per_batch):
+            chunk = [encode(e, tokenizer, max_length) for e in examples[start:start + calls_per_batch]]
+            flat = [row for rows in chunk for row in rows]
+            all_logits = tuple(z / temperature for z in model(flat))
+            offset = 0
+            for rows in chunk:
+                logits = all_logits[offset:offset + len(rows)]
+                offset += len(rows)
+                # mean_nll stays dispatch+urgency only, so selection matches checkpoints without extra questions.
+                main = [(z, r) for z, r in zip(logits, rows) if r["qid"] in PRIMARY]
+                aux = [(z, r) for z, r in zip(logits, rows) if r["qid"] not in PRIMARY]
+                nll.append(float(supervised_loss(*zip(*main))) if main else float(supervised_loss(logits, rows)))
+                if aux:
+                    aux_nll.append(float(supervised_loss(*zip(*aux))))
+                call = {}
+                for row, z in zip(rows, logits):
+                    name = row["qid"]
+                    labels.setdefault(name, list(row["keys"]))
+                    gold, guess = row["keys"][row["label"]], row["keys"][int(z.argmax())]
+                    call[name] = (gold, guess)
+                    actual.setdefault(name, []).append(gold)
+                    predicted.setdefault(name, []).append(guess)
+                    if name == "subtype":
+                        derived.append(subtype_dispatch(row["keys"], torch.softmax(z.float(), -1).tolist()))
+                if "dispatch" in call and call["dispatch"][0] in SUBTYPE_OF and SUBTYPE_OF[call["dispatch"][0]] in call:
+                    # End to end: right dispatch type and, under it, the right subtype.
+                    gold_d, guess_d = call["dispatch"]
+                    gold_s, guess_s = call[SUBTYPE_OF[gold_d]]
+                    hierarchy[f"{gold_d}_calls"] += 1
+                    hierarchy[f"{gold_d}_end_to_end_correct"] += guess_d == gold_d and guess_s == gold_s
     result = {name: classification_metrics(actual[name], predicted[name], labels[name]) for name in labels}
+    for kind in SUBTYPE_OF:
+        if hierarchy[f"{kind}_calls"]:
+            result[f"{kind}_subtype_end_to_end_accuracy"] = (
+                hierarchy[f"{kind}_end_to_end_correct"] / hierarchy[f"{kind}_calls"])
     if derived and "dispatch" in labels:
         # Dispatch implied by summing subtype probabilities within each dispatch type.
         result["dispatch_from_subtype"] = classification_metrics(actual["dispatch"], derived, labels["dispatch"])
@@ -165,7 +192,7 @@ def learning_rate_scale(step, max_steps, warmup_ratio=0.0, schedule="constant"):
 def fit(model, tokenizer, train, dev, output, *, max_steps=20, grad_accum=4,
         learning_rate=1e-4, max_length=4096, seed=119, eval_every=10, objective=None,
         head_learning_rate=None, warmup_ratio=0.0, schedule="constant", oversample=None,
-        select_by="nll", max_downward_rate=None, keep_checkpoints=False):
+        select_by="nll", max_downward_rate=None, keep_checkpoints=False, calls_per_batch=1):
     """Bounded single-device supervised fit; choose checkpoints on dev only, never test."""
     import shutil
     import torch
@@ -181,7 +208,7 @@ def fit(model, tokenizer, train, dev, output, *, max_steps=20, grad_accum=4,
     for group in groups:
         group["initial_lr"] = group["lr"]
     optimizer = torch.optim.AdamW(groups)
-    base = evaluate(model, dev, tokenizer, max_length)
+    base = evaluate(model, dev, tokenizer, max_length, calls_per_batch=calls_per_batch)
     best_key, best_step = None, None
     gradient_verified = False
     adapter_gradient_verified = False
@@ -195,10 +222,12 @@ def fit(model, tokenizer, train, dev, output, *, max_steps=20, grad_accum=4,
         optimizer.zero_grad(set_to_none=True)
         total_loss = 0.0
         for _ in range(grad_accum):
-            if cursor == len(order):
-                order, cursor = training_order(train, oversample or {}, rng), 0
-            rows = encode(train[order[cursor]], tokenizer, max_length, rng)
-            cursor += 1
+            rows = []
+            for _ in range(calls_per_batch):  # several short calls share one padded forward pass
+                if cursor == len(order):
+                    order, cursor = training_order(train, oversample or {}, rng), 0
+                rows.extend(encode(train[order[cursor]], tokenizer, max_length, rng))
+                cursor += 1
             loss = training_loss(model(rows), rows, objective)
             if not torch.isfinite(loss):
                 raise RuntimeError("Nonfinite training loss")
@@ -213,7 +242,7 @@ def fit(model, tokenizer, train, dev, output, *, max_steps=20, grad_accum=4,
         optimizer.step()
         event = {"step": step, "train_loss": total_loss, "gradient_norm": float(norm), "lr_scale": scale}
         if step % eval_every == 0 or step == max_steps:
-            metrics = evaluate(model, dev, tokenizer, max_length)
+            metrics = evaluate(model, dev, tokenizer, max_length, calls_per_batch=calls_per_batch)
             event["dev"] = metrics
             key = selection_key(metrics, select_by, max_downward_rate)
             if keep_checkpoints:
@@ -234,7 +263,7 @@ def fit(model, tokenizer, train, dev, output, *, max_steps=20, grad_accum=4,
     if model.train_backbone and not adapter_gradient_verified:
         raise RuntimeError("No nonzero LoRA gradient was observed")
     reload_adaptation(model, output)
-    adapted = evaluate(model, dev, tokenizer, max_length)
+    adapted = evaluate(model, dev, tokenizer, max_length, calls_per_batch=calls_per_batch)
     recorded = next(event["dev"] for event in history if event["step"] == best_step)
     if not math.isclose(adapted["mean_nll"], recorded["mean_nll"], rel_tol=1e-5, abs_tol=1e-5):
         raise RuntimeError("Saved/reloaded head failed the dev loss consistency check")
@@ -269,11 +298,34 @@ def parse_multipliers(text):
     return result
 
 
+def parse_task_weights(items):
+    """['ems_subtype=1.0', ...] -> {'ems_subtype': 1.0}; explicit weights override the defaults."""
+    out = {}
+    for item in items or []:
+        qid, _, value = item.partition("=")
+        try:
+            weight = float(value)
+        except ValueError:
+            raise ValueError(f"Invalid --task-weight {item!r}; use question_id=weight") from None
+        if not qid or not math.isfinite(weight) or weight < 0:
+            raise ValueError(f"Invalid --task-weight {item!r}; use question_id=weight with weight >= 0")
+        out[qid] = weight
+    return out
+
+
+def select_questions(example, keep):
+    """Drop questions outside ``keep`` (None keeps all); labels and metadata are untouched."""
+    if keep is None:
+        return example
+    return {**example, "questions": {q: v for q, v in example["questions"].items() if q in keep}}
+
+
 def build_objective(args, train):
     objective = {"task_weights": {"dispatch": 1.0, "urgency": args.urgency_weight}}
-    for qid in train[0]["questions"]:
+    for qid in sorted({q for e in train for q in e["questions"]}):
         if qid not in PRIMARY:
             objective["task_weights"][qid] = args.aux_weight
+    objective["task_weights"].update(parse_task_weights(args.task_weight))
     if args.urgency_label_smoothing:
         objective["label_smoothing"] = {"urgency": args.urgency_label_smoothing}
     if args.urgency_cost_weight:
@@ -331,19 +383,25 @@ def main():
     parser.add_argument("--max-downward-rate", type=float,
                         help="With --select-by composite, prefer dev steps at or below this downward error rate")
     parser.add_argument("--keep-checkpoints", action="store_true", help="Also save every evaluated step")
+    parser.add_argument("--task-weight", action="append", default=[],
+                        help="Per-question loss weight, repeatable: --task-weight ems_subtype=1.0")
+    parser.add_argument("--questions", help="Comma-separated question IDs to keep (default: all in the data)")
+    parser.add_argument("--calls-per-batch", type=int, default=1,
+                        help="Calls encoded into one padded forward pass (effective batch = this x --grad-accum)")
     args = parser.parse_args()
     if min(args.max_length, args.max_steps, args.grad_accum, args.eval_every, args.lora_rank, args.lora_alpha) <= 0:
         parser.error("Lengths, steps, accumulation and evaluation interval must be positive")
     if not 0 <= args.warmup_ratio < 1 or not 0 <= args.urgency_label_smoothing < 1:
         parser.error("Warmup ratio and label smoothing must be in [0, 1)")
     if (min(args.urgency_weight, args.downward_cost) <= 0 or args.urgency_cost_weight < 0
-            or args.dispatch_logit_adjust < 0 or args.aux_weight < 0):
+            or args.dispatch_logit_adjust < 0 or args.aux_weight < 0 or args.calls_per_batch < 1):
         parser.error("Loss weights and costs must be nonnegative (task weight and downward cost positive)")
     if args.head_learning_rate is not None and (not math.isfinite(args.head_learning_rate)
                                                 or args.head_learning_rate <= 0):
         parser.error("Head learning rate must be finite and positive")
     try:
         oversample = parse_multipliers(args.oversample)
+        parse_task_weights(args.task_weight)
     except ValueError as exc:
         parser.error(str(exc))
     if args.max_length > MAX_BRANCH:
@@ -379,18 +437,21 @@ def main():
                 raise ValueError("Use the checkpoint's max_length for evaluation")
             metadata["mode"] = prior["mode"]
         prompt = resolve_prompt(args.prompt_variant, args.guideline_dir, prior)
+        # A checkpoint is evaluated on the questions it was trained with unless --questions overrides it.
+        chosen = args.questions or (prior or {}).get("config", {}).get("questions")
+        keep = {q.strip() for q in chosen.split(",") if q.strip()} if chosen else None
         metadata["prompt"] = prompt
         if args.evaluate_only:
             examples, manifest = evaluation_split(args.data, args.evaluate_only, prior, args.reference_data)
-            examples = [apply_prompt(e, prompt) for e in examples]
+            examples = [select_questions(apply_prompt(e, prompt), keep) for e in examples]
         else:
             train, manifest = load_split(args.data, "train")
             dev, _ = load_split(args.data, "dev")
             for key in ("group_id", "record_id", "content_hash"):
                 if {r["_meta"][key] for r in train} & {r["_meta"][key] for r in dev}:
                     raise ValueError(f"Train/dev overlap in {key}")
-            train = [apply_prompt(e, prompt) for e in train]
-            dev = [apply_prompt(e, prompt) for e in dev]
+            train = [select_questions(apply_prompt(e, prompt), keep) for e in train]
+            dev = [select_questions(apply_prompt(e, prompt), keep) for e in dev]
         metadata["dataset_manifest"] = manifest
         model, tokenizer, identity = load_zoro(device=args.device, model_dir=args.model_dir,
             head_path=args.checkpoint / "decision_head.pt" if args.checkpoint else None,
@@ -406,7 +467,8 @@ def main():
         if args.evaluate_only:
             examples, coverage = filter_examples(examples, tokenizer, args.max_length)
             result = {"split": args.evaluate_only, "coverage": coverage,
-                      "metrics": evaluate(model, examples, tokenizer, args.max_length)}
+                      "metrics": evaluate(model, examples, tokenizer, args.max_length,
+                                          calls_per_batch=args.calls_per_batch)}
         else:
             train, train_coverage = filter_examples(train, tokenizer, args.max_length)
             dev, dev_coverage = filter_examples(dev, tokenizer, args.max_length)
@@ -419,7 +481,7 @@ def main():
                          objective=objective, head_learning_rate=args.head_learning_rate,
                          warmup_ratio=args.warmup_ratio, schedule=args.schedule, oversample=oversample,
                          select_by=args.select_by, max_downward_rate=args.max_downward_rate,
-                         keep_checkpoints=args.keep_checkpoints)
+                         keep_checkpoints=args.keep_checkpoints, calls_per_batch=args.calls_per_batch)
             result["coverage"] = {"train": train_coverage, "dev": dev_coverage}
             write_json(args.output / "temperature.json", {"text": 1.0})
         metadata.update(status="completed", elapsed_seconds=time.monotonic() - start,
