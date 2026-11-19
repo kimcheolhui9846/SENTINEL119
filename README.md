@@ -87,6 +87,8 @@ def refresh(turn_id, supports, location, vehicles, hospitals):
 
 ## 문서
 
+데모 첫 화면은 출동 관제(실제 통화 재생, 지도 배차·병원 이송), 모델 비교(Qwen·SENTINEL_ZORO·base), 직접 입력(지도에서 위치 지정 후 대화) 세 탭입니다. 이전 관제 콘솔은 `/#console`, 자동 모의훈련은 `/#drill` 주소로 열 수 있습니다.
+
 서울 지도에서 신고자 핀을 누르며 구급·화재 출동을 재현하는 방법은 [자동 모의훈련 실행 안내](docs/handoffs/seoul-drill.md)에 있습니다.
 
 상세 설계와 개발 문서는 [문서 안내](docs/README.md)에서 확인할 수 있습니다.
