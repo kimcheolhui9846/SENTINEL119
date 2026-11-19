@@ -107,3 +107,17 @@
 .dispatch-bottom .dispatch-transcript ol { max-height: 300px; }
 .dispatch-bottom .dispatch-orders { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 @media (max-width: 1100px) { .dispatch-bottom { grid-template-columns: minmax(0, 1fr); } }
+
+.dispatch-bottom { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 1300px) { .dispatch-bottom { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.dispatch-marker--hospital { --marker-color: #185c91; border-radius: 50%; }
+.dispatch-marker--hospital.is-chosen { box-shadow: 0 0 0 3px #185c91, 0 0 0 6px #fff, 0 4px 10px #1a344799; }
+.dispatch-legend [data-kind="hospital"] { --c: #185c91; }
+.transfer-rule { font-size: 14px; margin: 0; }
+.transfer-rule strong { color: var(--action-strong); }
+.transfer-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.transfer-list li { display: grid; gap: 4px; padding: 8px 10px; border-radius: var(--radius); background: var(--panel-2); border-left: 4px solid #4b86b8; }
+.transfer-list li[data-chosen="true"] { border-left-color: var(--mint); background: var(--mint-bg); }
+.transfer-list li[data-chosen="true"] strong { color: var(--mint); }
+.transfer-list .prob-track { height: 8px; }
+.transfer-list p { margin: 0; font-size: 13px; }

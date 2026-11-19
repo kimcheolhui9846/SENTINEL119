@@ -6,7 +6,7 @@ import type { CompareScenario, ScenarioDetail } from './compareApi';
 import { advance, DISPATCH_THRESHOLD, emptyZoro, THRESHOLD } from './CompareView';
 import type { Labels, ZoroState } from './CompareView';
 import { dispatchApi } from './dispatchApi';
-import type { Assignment, FleetUnit, Patrol, Point } from './dispatchApi';
+import type { Assignment, FleetUnit, Patrol, Point, TransferResponse } from './dispatchApi';
 import 'leaflet/dist/leaflet.css';
 import './drill.css';
 import './dispatch.css';
@@ -54,9 +54,18 @@ function positionAt(m: Moving, now: number, loop = false) {
 interface Line { speaker: 0 | 1; text: string; note?: string; base?: string; ms?: number }
 interface Order extends Assignment { turn: number; dispatchedAt: number }
 
-function DispatchMap({ fleet, area, orders, patrols, positions, overlay }: {
+const HOSPITAL_ICON = '<path d="M4 21V5h16v16M2 21h20m-10-13v6m-3-3h6m-5 10v-4h4v4"/>';
+function hospitalIcon(chosen: boolean) {
+  return L.divIcon({
+    className: `drill-marker dispatch-marker dispatch-marker--hospital ${chosen ? 'is-chosen' : ''}`, iconSize: chosen ? [38, 38] : [28, 28],
+    html: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" '
+      + 'stroke-linecap="round" aria-hidden="true" focusable="false">' + HOSPITAL_ICON + '</svg>',
+  });
+}
+
+function DispatchMap({ fleet, area, orders, patrols, positions, overlay, transfer }: {
   fleet: FleetUnit[]; area: ScenarioDetail['area'] | null; orders: Order[]; patrols: Patrol[];
-  positions: React.MutableRefObject<Record<string, Point>>; overlay?: React.ReactNode;
+  positions: React.MutableRefObject<Record<string, Point>>; overlay?: React.ReactNode; transfer: TransferResponse | null;
 }) {
   const element = useRef<HTMLDivElement>(null);
   const state = useRef<{ map: L.Map; markers: Map<string, L.Marker>; incident?: L.LayerGroup; routes: L.LayerGroup;
@@ -131,6 +140,30 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay }: {
     }
   }, [patrols, fleet, positions]);
 
+  // Transfer: candidate hospitals and the road route to Zoro's choice.
+  const hospitalLayer = useRef<L.LayerGroup | null>(null);
+  useEffect(() => {
+    const s = state.current;
+    if (!s) return;
+    hospitalLayer.current?.remove();
+    hospitalLayer.current = null;
+    if (!transfer || transfer.status !== 'ok' || !area) return;
+    const group = L.layerGroup().addTo(s.map);
+    const chosen = transfer.zoro?.choice;
+    for (const h of transfer.hospitals) {
+      const p = transfer.zoro?.probabilities[h.hpid];
+      L.marker([h.lat, h.lon], { icon: hospitalIcon(h.hpid === chosen), zIndexOffset: h.hpid === chosen ? 1800 : 900, keyboard: false })
+        .bindTooltip(`${h.name} · ${h.level}${p !== undefined ? ` · Zoro ${Math.round(p * 100)}%` : ''}`,
+          { permanent: h.hpid === chosen, direction: 'top', offset: [0, -18] }).addTo(group);
+      if (h.hpid === chosen) {
+        const path = h.route.path.map(latLng);
+        L.polyline(path, { color: '#ffffff', weight: 8, opacity: 0.8, interactive: false }).addTo(group);
+        L.polyline(path, { color: '#185c91', weight: 4.5, dashArray: '10 6', interactive: false }).addTo(group);
+      }
+    }
+    hospitalLayer.current = group;
+  }, [transfer, area]);
+
   // Incident area: the call's 법정동 and its centre.
   useEffect(() => {
     const s = state.current;
@@ -189,6 +222,7 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay }: {
       <ul className="dispatch-legend" aria-label="범례">
         {(['ambulance', 'pump', 'rescue'] as const).map((k) => <li key={k} data-kind={k}>{UNIT_LABEL[k]}</li>)}
         <li data-kind="caller">신고 위치 (동 안의 시연용 임의 지점)</li>
+        {transfer?.status === 'ok' ? <li data-kind="hospital">이송 병원 (Zoro 선택)</li> : null}
         {patrols.length ? <li className="legend-note">차량 순찰은 시연용 연출 · 서울 {patrols.length}대</li> : null}
       </ul>
     </div>
@@ -217,6 +251,8 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
   const [now, setNow] = useState(performance.now());
   const [patrols, setPatrols] = useState<Patrol[]>([]);
   const [labels, setLabels] = useState<Labels | null>(null);
+  const [transfer, setTransfer] = useState<TransferResponse | null>(null);
+  const transferKey = useRef('');
   const positions = useRef<Record<string, Point>>({});
   const run = useRef(0);
   const sentKey = useRef('');
@@ -232,7 +268,7 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
   useEffect(() => { const id = window.setInterval(() => setNow(performance.now()), 500); return () => window.clearInterval(id); }, []);
 
   const reset = useCallback(() => {
-    run.current += 1; sentKey.current = '';
+    run.current += 1; sentKey.current = ''; transferKey.current = ''; setTransfer(null);
     setPlaying(false); setBusy(false); setLines([]); setSft(emptyZoro()); setBase(emptyZoro()); setOrders([]);
     setError(null); setShowGold(false);
   }, []);
@@ -264,6 +300,21 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
     ]);
   }, [call]);
 
+  // EMS only: once urgency is committed, pick the transfer hospital (KB rule + NMC live beds + Zoro choice).
+  const syncTransfer = useCallback(async (state: ZoroState, turns: { speaker: 0 | 1; text: string }[]) => {
+    const c = state.commits;
+    if (c.dispatch?.label !== '구급' || !c.urgency || !call?.area) return;
+    const key = [c.subtype?.label, c.symptom?.label, c.urgency.label].join('|');
+    if (key === transferKey.current) return;
+    transferKey.current = key;
+    const myRun = run.current;
+    try {
+      const res = await dispatchApi.transfer({ ...call.area.center, turns, subtype: c.subtype?.label,
+        symptom: c.symptom?.label, urgency: c.urgency.label });
+      if (myRun === run.current) setTransfer(res);
+    } catch { /* the dispatch view keeps working without hospital data */ }
+  }, [call]);
+
   const step = useCallback(async () => {
     if (!call || busy || lines.length >= call.turns.length) return;
     const myRun = run.current;
@@ -282,12 +333,13 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
       setLines((l) => l.map((line, i) => (i === turns.length - 1
         ? { ...line, note: s.note, base: b.note, ms: res.results.sft.latency_ms } : line)));
       await syncDispatch(nextSft, turns.length);
+      void syncTransfer(nextSft, turns);
     } catch {
       if (myRun === run.current) { setError('모델 서버 응답이 없습니다. 연결을 확인하세요.'); setPlaying(false); }
     } finally {
       if (myRun === run.current) setBusy(false);
     }
-  }, [call, busy, lines, syncDispatch]);
+  }, [call, busy, lines, syncDispatch, syncTransfer]);
 
   const done = !!call && lines.length >= call.turns.length && !busy;
   useEffect(() => {
@@ -382,7 +434,7 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
       {error ? <div className="alert" role="alert">{error}</div> : null}
       <div className="dispatch-grid">
         <DispatchMap fleet={fleet} area={lines.length ? call?.area ?? null : null} orders={orders} patrols={patrols}
-          positions={positions} overlay={overlay} />
+          positions={positions} overlay={overlay} transfer={transfer} />
         <aside className="dispatch-side">
           <section className="panel dispatch-card">
             <header className="panel-header"><h2 className="section-title">SENTINEL_ZORO 판단</h2>
@@ -420,6 +472,34 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
               ))}
               {!lines.length ? <li className="meta">재생을 누르면 통화가 한 턴씩 들어오고, 턴마다 SENTINEL_ZORO가 판단합니다.</li> : null}
             </ol>
+          </section>
+          <section className="panel dispatch-card dispatch-transfer">
+            <header className="panel-header"><h2 className="section-title">이송 병원</h2>
+              <span className="meta">{transfer?.zoro?.latency_ms ? `Zoro ${Math.round(transfer.zoro.latency_ms)}ms` : ''}</span></header>
+            {!transfer ? <p className="meta">구급 출동에서 긴급도가 확정되면, 지침 기준과 응급실 실시간 병상으로 후보를 고르고 Zoro가 이송 병원을 선택합니다.</p>
+              : transfer.status === 'unconfigured' ? <p className="meta">국립중앙의료원 API 키(NMC_SERVICE_KEY)가 설정되지 않아 병원 정보를 가져오지 못했습니다.</p>
+              : transfer.status === 'unavailable' ? <p className="meta">국립중앙의료원 API 응답이 없습니다. 잠시 뒤 다시 시도합니다.</p> : (
+              <>
+                <p className="transfer-rule"><strong>{transfer.rule.category}</strong> · {transfer.rule.text}</p>
+                <p className="do-source">근거: {transfer.rule.source}</p>
+                {!transfer.hospitals.length ? <p className="meta">기준에 맞고 응급실 병상이 있는 병원이 주변에 없습니다.</p> : (
+                  <ol className="transfer-list">
+                    {transfer.hospitals.map((h) => {
+                      const p = transfer.zoro?.probabilities[h.hpid] ?? 0;
+                      const chosen = transfer.zoro?.choice === h.hpid;
+                      return (
+                        <li key={h.hpid} data-chosen={chosen}>
+                          <div className="do-head"><strong>{chosen ? '✓ ' : ''}{h.name}</strong><span className="tabular">{Math.round(p * 100)}%</span></div>
+                          <span className="prob-track"><span className="prob-fill" style={{ width: `${Math.round(p * 100)}%` }} /></span>
+                          <p className="meta">{h.context.slice(h.name.length + 3)}</p>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                )}
+                <p className="do-source">{transfer.source} · 위 병원별 정보가 Zoro 선택지 문구로 들어가며, 병원 선택은 공개 Zoro 결정 헤드(학습하지 않은 과제)입니다.</p>
+              </>
+            )}
           </section>
           <section className="panel dispatch-card">
             <header className="panel-header"><h2 className="section-title">출동 지령</h2>
