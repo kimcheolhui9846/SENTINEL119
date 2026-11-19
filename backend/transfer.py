@@ -158,7 +158,8 @@ async def _messages(client, hospital):
         rows = await _items(client, "getEmrrmSrsillDissMsgInqire", {"HPID": hospital["hpid"], "numOfRows": "10", "pageNo": "1"})
     except (httpx.HTTPError, ValueError, ET.ParseError):
         return []
-    return [r.get("symBlkMsg", "").strip() for r in rows if r.get("symBlkMsg", "").strip()][:3]
+    texts = [r.get("symBlkMsg", "").strip() for r in rows if r.get("symBlkMsg", "").strip()]
+    return list(dict.fromkeys(texts))[:3]  # the same notice is often posted once per department
 
 
 def _neighbors(point, count=3):
