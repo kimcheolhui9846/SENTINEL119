@@ -36,7 +36,7 @@ def _calls():
             data = json.loads(path.read_text(encoding="utf-8"))
             calls[data["id"]] = {"id": data["id"], "title": data["title"], "summary": data.get("summary", ""),
                                  "private": "private" in path.parts, "gold": data.get("gold"),
-                                 "area": find_area(data.get("address")),
+                                 "area": find_area(data.get("address"), seed=data["id"]),
                                  "turns": [{"speaker": 1 if t["speaker"] else 0, "text": t["text"]} for t in data["turns"]]}
     return calls
 

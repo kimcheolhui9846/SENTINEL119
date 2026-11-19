@@ -24,8 +24,34 @@ def _dongs():
     return {(f["properties"]["district"], f["properties"]["name"]): f for f in data["features"]}
 
 
-def find_area(address):
-    """'서울특별시 성동구 성수동1가' -> area dict, or None outside the Seoul dong map."""
+def _inside(lon, lat, ring):
+    hit = False
+    for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
+        if (y1 > lat) != (y2 > lat) and lon < (x2 - x1) * (lat - y1) / (y2 - y1) + x1:
+            hit = not hit
+    return hit
+
+
+def _random_point(geometry, seed):
+    """A reproducible point inside the dong (rejection sampling over its bounding box)."""
+    import random
+    polygons = [geometry["coordinates"]] if geometry["type"] == "Polygon" else geometry["coordinates"]
+    rings = [poly[0] for poly in polygons]
+    xs = [x for ring in rings for x, _ in ring]
+    ys = [y for ring in rings for _, y in ring]
+    rng = random.Random(seed)
+    for _ in range(2000):
+        lon, lat = rng.uniform(min(xs), max(xs)), rng.uniform(min(ys), max(ys))
+        if any(_inside(lon, lat, ring) for ring in rings):
+            return {"lon": round(lon, 6), "lat": round(lat, 6)}
+    return None
+
+
+def find_area(address, seed=None):
+    """'서울특별시 성동구 성수동1가' -> area dict, or None outside the Seoul dong map.
+
+    With ``seed`` the incident point is a reproducible random point inside the dong (demo stand-in for
+    the caller position); without it, the dong centre."""
     parts = (address or "").split()
     if len(parts) != 3 or not parts[0].startswith("서울"):
         return None
@@ -33,8 +59,10 @@ def find_area(address):
     if feature is None:
         return None
     props = feature["properties"]
+    dong_center = {"lon": props["center"][0], "lat": props["center"][1]}
+    point = _random_point(feature["geometry"], seed) if seed is not None else None
     return {"city": parts[0], "district": props["district"], "dong": props["name"], "code": props["code"],
-            "center": {"lon": props["center"][0], "lat": props["center"][1]},
+            "center": point or dong_center, "dong_center": dong_center, "random_point": point is not None,
             "geometry": feature["geometry"], "precision": "법정동",
             "source": "AI Hub 71768 address · JUSO 2015 법정동 경계 (southkorea/seoul-maps, Apache-2.0)"}
 

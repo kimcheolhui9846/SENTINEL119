@@ -139,11 +139,8 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay }: {
     s.incident = undefined;
     if (!area) return;
     const group = L.layerGroup().addTo(s.map);
-    L.geoJSON({ type: 'Feature', properties: {}, geometry: area.geometry } as GeoJSON.Feature, {
-      interactive: false, style: { color: '#613ca4', weight: 2.5, dashArray: '6 4', fillColor: '#8b6cc6', fillOpacity: 0.18 },
-    }).addTo(group);
     L.marker(latLng(area.center), { icon: icon('caller', 'is-caller', 40), zIndexOffset: 2000, keyboard: false })
-      .bindTooltip(`신고 위치 · ${area.district} ${area.dong} 일대`, { permanent: true, direction: 'top', offset: [0, -20] })
+      .bindTooltip(`신고 위치 · ${area.district} ${area.dong}`, { permanent: true, direction: 'top', offset: [0, -20] })
       .addTo(group);
     s.incident = group;
     s.map.flyTo(latLng(area.center), 14.5, { duration: 1.2 });
@@ -191,7 +188,7 @@ function DispatchMap({ fleet, area, orders, patrols, positions, overlay }: {
       {overlay}
       <ul className="dispatch-legend" aria-label="범례">
         {(['ambulance', 'pump', 'rescue'] as const).map((k) => <li key={k} data-kind={k}>{UNIT_LABEL[k]}</li>)}
-        <li data-kind="caller">신고 위치(법정동)</li>
+        <li data-kind="caller">신고 위치 (동 안의 시연용 임의 지점)</li>
         {patrols.length ? <li className="legend-note">차량 순찰은 시연용 연출 · 서울 {patrols.length}대</li> : null}
       </ul>
     </div>
@@ -417,7 +414,7 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
           </section>
           <section className="panel dispatch-card">
             <header className="panel-header"><h2 className="section-title">출동 지령</h2>
-              <span className="meta">{call?.area ? `${call.area.district} ${call.area.dong} 일대` : ''}</span></header>
+              <span className="meta">{call?.area ? `${call.area.district} ${call.area.dong}` : ''}</span></header>
             {!orders.length ? <p className="meta">{c.dispatch ? (c.dispatch.label === '기타' ? '기타: 출동 없이 상담·이첩' : '배차 계산 중…')
               : '출동유형이 확정되면 가장 빨리 도착하는 차량을 보냅니다.'}</p> : (
               <ol className="dispatch-orders">
