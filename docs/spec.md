@@ -2,7 +2,7 @@
 
 작성: 2026-11-19 / 마감: 2026-11-20 09:00 KST.
 
-상태: 구현 전. **확정 범위**는 사용자 답변을 반영한다. 나머지는 완성을 위한 **구현 기본안**이며, 실제 성능·호환성·임상 타당성을 검증했다는 뜻이 아니다. 화면 기준은 [DESIGN.md](../DESIGN.md)에 둔다.
+상태: 데이터 준비·지도학습·독립 평가 코드와 단위검사를 구현했다. 관제 데모는 미검증이다. **확정 범위**는 사용자 답변을 반영한다. 나머지는 완성을 위한 **구현 기본안**이며, 임상 타당성을 검증했다는 뜻이 아니다. 화면 기준은 [DESIGN.md](../DESIGN.md), 학습 실행과 검증 절차는 [학습 안내](training.md)에 둔다.
 
 Track 1의 공식 평가·제출 요건은 [평가 기준과 제출 체크리스트](track1-submission.md)를 따른다. 주최 측 안내자료를 확인해 v0.2에 반영했다.
 
@@ -91,7 +91,7 @@ flowchart LR
 - 모델 추론 실패를 정해진 추천으로 감추지 않는다. 저장된 실행을 재생할 경우 `기록 재생`이라고 표시한다.
 - 원본 실험 로그와 별도로, 실제 모델 요청·정책·도구 결과를 연결한 제출용 실행 로그를 내보낸다. 공유할 JSONL은 `docs/submission/logs/`에 두고 검토 후 Git으로 추적한다.
 
-Zoro의 공식 decision-only 학습 경로는 확인했지만, 현 체크포인트의 단일 L40S 학습·LoRA·커스텀 head 호환성은 미검증이다. 모델과 upstream revision을 첫 실행에서 고정한다.
+Zoro의 공식 decision-only 학습 경로를 확인하고 모델·upstream revision을 학습 코드에 고정했다. native Qwen3.5의 작은 모델에서 head-only/LoRA gradient·저장·재로드를 검사하는 테스트를 제공한다. 실제 모델 파일을 확인해 Transformers 5.12.1을 고정했으며, GPU의 PyTorch 선택과 실행·검증 절차는 [학습 안내](training.md)를 따른다. 서비스 p95 지연은 별도 미측정이다.
 
 ## 5. 지침·자원·병원 세계
 
@@ -121,13 +121,13 @@ API 연결이 안 되면 출처와 수집 시각이 있는 저장 응답을 사�
 
 ### 데이터 구성
 
-AI Hub 71768의 `utterances`와 통화 단위 `disasterLarge`, `urgencyLevel`을 사용한다. 표본에서 `symptom`, `triage`는 비어 있었으므로 존재만으로 유효 정답이라고 가정하지 않는다.
+AI Hub 71768의 `utterances`와 통화 단위 `disasterLarge`, `urgencyLevel`을 사용한다. 최초 2개 표본에서는 `symptom`, `triage`가 비어 있었지만, 이후 로컬 143,075건 검사에서는 유효 기록 중 각각 88,938건·93,437건에 값이 있었다. 내용의 타당성은 미검증이며 이번 분류 입력·정답에 사용하지 않는다. 제외 사유와 분할 결과는 [학습 안내](training.md)에 기록한다.
 
 1. `recordId`와 중복 내용으로 통화를 묶고 **통화 단위로 먼저 분할**한다. 같은 통화의 모든 prefix·변형은 같은 split에 둔다.
 2. 공식 Training에서 학습·개발을, 공식 Validation에서 최종 평가 표본을 만든다. 통화 중복을 확인한다. 개발셋으로 임계값·모델을 고르고 평가셋은 선택에 사용하지 않는다.
 3. 입력은 현재까지의 발화만 포함한다. 정답 라벨, 통화 전체 주소·증상, 미래 발화와 미래 병원 상태를 입력에 넣지 않는다.
 4. 화자 코드와 발화 시간 순서를 표본으로 검증한다. 원본 타임스탬프와 turn ID를 보존한다.
-5. 최초 로드·학습 확인은 100통화로 시작한다. 본 실험 목표 상한은 학습 2,000 / 개발 300 / 평가 500통화다. 확보된 클래스·긴급도 분포에 따라 실제 수량과 누락을 기록한다.
+5. 최초 로드·학습 확인은 100통화로 시작한다. 첫 기준선은 학습 2,000 / 개발 300 / 평가 500통화다. 후속 헤드 단독 대조는 같은 2,000/300건을 사용한다. 조건부 확대용 학습 8,000건과 별도 비교·최종 평가 각 1,000건의 용도와 선택 기준은 [학습 안내 9절](training.md#9-2천-통화-헤드-단독-대조와-8천-통화-확대)에 둔다.
 
 통화 최종 라벨은 전체 대화 분류에 사용할 수 있지만 모든 prefix의 확정 정답으로 복제하지 않는다. 조기 확정 평가는 현재 근거로 판단 가능한 시점과 정답을 별도로 검토한 소규모 prefix 세트를 사용한다. 목표는 원본 통화 30개(학습 15 / 개발 5 / 평가 10)이며 검토 수량을 그대로 공개한다. 적은 표본으로 일반 성능을 주장하지 않는다.
 
@@ -210,9 +210,9 @@ GPU는 1개 인스턴스를 우선 검토한다. 시작 전에 실제 L40S 재�
 
 ## 9. 확인 상태와 다음 작업
 
-확인됨: 로컬 Training/Validation ZIP 존재와 JSON 2개 구조, 모델 카드의 decision API, upstream decision 학습 경로, 지침 경로와 draft 샘플, 기존 NMC/ETA 연동 소스, 사용자 Zoro 접근 허가.
+확인됨: 로컬 Training/Validation 라벨 ZIP 24개·143,075건 검사와 통화 단위 분할 구현, 인증된 Zoro 모델 파일, 모델 카드의 decision API, upstream decision 학습 경로, 데이터·모델 단위검사, 지침 경로와 draft 샘플, 기존 NMC/ETA 연동 소스. 데이터 검사 결과와 실행·검증 절차는 [학습 안내](training.md)를 따른다.
 
-미확인: Brev 인스턴스·접속 방법·실제 GPU 요금, NMC/Tmap 키와 현재 호출 성공 여부, 모델 학습 호환성·속도, 데이터 전체 품질, 데모 규칙의 원문 대조. 제출 준비에는 팀명·발표순서·제공 템플릿 URL·실제 Google Slides·데모 URL·심사위원 초대·접근 확인이 남아 있다. 공식 제출 폴더 주소와 심사위원 계정은 제출 체크리스트에 기록했다.
+미확인: 실제 GPU 사용 요금·잔액, NMC/Tmap 키와 현재 호출 성공 여부, 서비스 p95 지연·prefix 조기 판단·긴급도 calibration·차량/병원 태스크에 대한 SFT 영향, 데이터 라벨의 의미적 품질, 데모 규칙의 원문 대조. 제출 준비에는 팀명·발표순서·제공 템플릿 URL·실제 Google Slides·데모 URL·심사위원 초대·접근 확인이 남아 있다. 공식 제출 폴더 주소와 심사위원 계정은 제출 체크리스트에 기록했다.
 
 다음 구현 시작 순서: **환경·키 존재 여부 확인 → Zoro 최소 decision 요청 → 통화 분할·턴 재생 → 실제 모델을 연결한 전체 흐름 → SFT → PPO gate.** 키 값은 문서·로그·프론트엔드에 넣지 않는다. 다른 프로젝트의 환자 데이터는 이번 데이터 범위에 포함하지 않는다.
 
@@ -221,7 +221,7 @@ GPU는 1개 인스턴스를 우선 검토한다. 시작 전에 실제 L40S 재�
 - 주최 측 `Trillion_Hackathon_2026_안내자료.pdf`: 3-4쪽 평가, 7쪽 GPU, 9-11쪽 제출물, 13쪽 제출 점검, 16쪽 일정. [Track 1 상세 반영](track1-submission.md).
 - [AI Hub 71768](https://www.aihub.or.kr/aihubdata/data/view.do?currMenu=115&dataSetSn=71768&topMenu=100): 원본 라벨·전사 구조.
 - [Zoro-1 모델 카드](https://huggingface.co/trillionlabs/Zoro-1): typed decision, direct/reasoned 경로.
-- [trida-stack](https://github.com/trillion-labs/trida-stack): decision-only 지도학습 경로. 로컬 호환성은 미검증.
+- [trida-stack](https://github.com/trillion-labs/trida-stack): decision-only 지도학습 경로. 고정 revision의 텍스트 choice 인코딩과 pointer head 계약을 참조한다.
 - [NVIDIA Brev 문서](https://docs.nvidia.com/brev/getting-started/overview): 실행 환경 참고. 가격은 실제 제공 화면에서 별도 확인.
 - [NMC 응급의료기관 API](https://www.data.go.kr/data/15000563/openapi.do): 병상·중증질환 수용정보.
 - 로컬 데이터: `C:/Users/jaeuk/Downloads/088.위급상황 음성-음향_고도화_119 지능형 신고접수 음성 인식 데이터`.
