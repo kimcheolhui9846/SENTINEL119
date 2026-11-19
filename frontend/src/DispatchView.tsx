@@ -375,22 +375,26 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
     : qid === 'urgency' ? THRESHOLD.urgency : qid === 'ems_symptom' ? THRESHOLD.symptom : THRESHOLD.subtype;
 
   // Banner: what the model decided on the latest turn, in one line.
-  let banner: { state: 'wait' | 'commit' | 'idle'; title: string; detail: string };
+  let banner: { state: 'wait' | 'commit' | 'idle'; title: string; detail: React.ReactNode };
   if (!last) banner = { state: 'idle', title: '대기', detail: '재생을 누르면 신고 통화가 한 턴씩 들어옵니다.' };
   else if (!last.note) banner = { state: 'idle', title: '판단 중…', detail: `${lines.length}턴까지의 대화를 보고 있습니다.` };
   else if (last.note !== 'WAIT') {
     const sent = orders.filter((o) => o.turn === lines.length && o.unit);
     banner = { state: 'commit', title: last.note.replace('COMMIT · ', 'COMMIT  '),
-      detail: sent.length ? `→ ${sent.map((o) => o.unit?.name).join(', ')} 출동`
-        : c.dispatch?.label === '기타' ? '→ 출동 없이 상담·이첩' : '' };
+      detail: sent.length ? <>→ <b className="hl-unit">{sent.map((o) => o.unit?.name).join(', ')}</b> 출동</>
+        : c.dispatch?.label === '기타' ? <>→ <b className="hl-unit">출동 없이 상담·이첩</b></> : '' };
   } else {
     const open: [string, string] | null = !c.dispatch ? ['dispatch', '출동유형'] : subQ && !c.subtype ? [subQ, '세부유형']
       : !c.urgency ? ['urgency', '긴급도'] : null;
     const d = open ? dist(open[0]) : undefined;
     const best = d ? Object.entries(d).sort((a, b) => b[1] - a[1])[0] : undefined;
     banner = { state: 'wait', title: 'WAIT  더 듣기',
-      detail: open && best && labels ? `${open[1]} 1순위 ${labels[open[0]]?.[best[0]] ?? best[0]} ${pct(best[1])} · 확정 기준 ${pct(need(open[0], best[0]))} 미만`
-        : '추가로 확정할 항목 없이 다음 발화를 기다립니다.' };
+      detail: open && best && labels ? (
+        <>
+          <span className="hl-task">{open[1]}</span> 1순위 <b className="hl-label">{labels[open[0]]?.[best[0]] ?? best[0]}</b>{' '}
+          <b className="hl-prob">{pct(best[1])}</b> <span className="hl-sep">·</span> 확정 기준 <b className="hl-need">{pct(need(open[0], best[0]))}</b> 미만
+        </>
+      ) : '추가로 확정할 항목 없이 다음 발화를 기다립니다.' };
   }
 
   const bars = (qid: string, title: string, commit?: { key: string; turn: number }) => {

@@ -124,3 +124,11 @@
 .transfer-basis { margin: 0; font-size: 13px; font-weight: 700; }
 .transfer-basis.is-wait { color: var(--amber); }
 .transfer-basis.is-commit { color: var(--mint); }
+/* Banner detail: the numbers that decide WAIT / COMMIT stand out. */
+.map-banner-detail { font-size: 16px; }
+.map-banner-detail .hl-task { color: #b6c8d2; font-weight: 600; }
+.map-banner-detail .hl-label { color: #ffffff; font-weight: 800; font-size: 18px; }
+.map-banner-detail .hl-prob { color: var(--amber); font-weight: 800; font-size: 20px; }
+.map-banner-detail .hl-need { color: var(--mint); font-weight: 800; }
+.map-banner-detail .hl-sep { color: #6f8797; margin: 0 2px; }
+.map-banner-detail .hl-unit { color: var(--mint); font-weight: 800; font-size: 18px; }
