@@ -142,11 +142,13 @@ export function ZoroPanel({ id, name, note, model, labels, busy }: {
           {labels ? <Chips dist={probs?.urgency} labels={labels.urgency} commit={model.commits.urgency}
                            threshold={THRESHOLD.urgency} locked={!d} /> : null}
         </div>
-        {subQ === "ems_subtype" && probs?.ems_symptom && labels?.ems_symptom ? (
-          <div className="drow"><span className="dlabel">주증상</span>
-            <Chips dist={probs.ems_symptom} labels={labels.ems_symptom} commit={model.commits.symptom} threshold={THRESHOLD.symptom} />
-          </div>
-        ) : null}
+        <div className="drow"><span className="dlabel">주증상</span>
+          {!d ? <span className="pending">출동유형 확정 후 열림</span>
+            : subQ !== "ems_subtype" ? <span className="pending">{d.label}: 구급 출동에서만 판단</span>
+            : probs?.ems_symptom && labels?.ems_symptom
+              ? <Chips dist={probs.ems_symptom} labels={labels.ems_symptom} commit={model.commits.symptom} threshold={THRESHOLD.symptom} />
+              : <span className="pending">이 체크포인트는 주증상을 학습하지 않음</span>}
+        </div>
       </div>
       <Latency last={model.latencies[model.latencies.length - 1]} list={model.latencies} busy={busy} />
     </section>
@@ -174,6 +176,9 @@ export function LlmPanel({ state, labels }: { state: LlmState; labels: Labels | 
         </div>
         <div className="drow"><span className="dlabel">긴급도</span>
           {labels ? <Chips labels={labels.urgency} picked={a ? a.urgency : undefined} /> : null}
+        </div>
+        <div className="drow"><span className="dlabel">주증상</span>
+          <span className="pending">생성 항목 아님 (출동유형·세부유형·긴급도만 생성)</span>
         </div>
         {state.raw ? <p className="llm-raw tabular" title="생성된 원문">{state.raw}</p> : null}
       </div>
