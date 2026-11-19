@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinel119"
+version = "0.1.0"
+description = "Zoro-1 decision adaptation for 119 call transcripts"
+requires-python = ">=3.11"
+dependencies = []
+license-files = ["THIRD_PARTY_NOTICES.md", "third_party/Apache-2.0.txt"]
+
+[project.optional-dependencies]
+transcript = ["scikit-learn==1.7.2"]
+train = ["torch>=2.6,<3", "transformers==5.12.1", "huggingface-hub>=1,<2", "accelerate>=1.0", "safetensors>=0.4", "pillow>=10", "sentencepiece>=0.2", "peft==0.21.0"]
+test = ["pytest>=8"]
+
+[project.scripts]
+sentinel119-prepare = "sentinel119.prepare:main"
+sentinel119-train = "sentinel119.train:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
