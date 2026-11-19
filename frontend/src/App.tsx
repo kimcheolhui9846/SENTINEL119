@@ -3,6 +3,7 @@ import type { KeyboardEvent } from 'react';
 import CompareView from './CompareView';
 import DispatchView from './DispatchView';
 import { api as compareApi } from './compareApi';
+import LegacyConsole from './LegacyConsole';
 import type { CompareScenario } from './compareApi';
 import './styles.css';
 
@@ -12,6 +13,12 @@ type Page = typeof pages[number];
 const pageNames: Record<Page, string> = { dispatch: '출동 관제', compare: '모델 비교', play: '직접 입력' };
 
 export default function App() {
+  // The teammate's session console and Seoul drill stay available outside the three demo tabs.
+  if (['#console', '#drill'].includes(window.location.hash)) return <LegacyConsole />;
+  return <DemoApp />;
+}
+
+function DemoApp() {
   const [page, setPage] = useState<Page>(() => {
     const hash = window.location.hash.slice(1) as Page;
     return pages.includes(hash) ? hash : 'dispatch';

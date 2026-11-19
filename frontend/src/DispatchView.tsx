@@ -398,6 +398,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   // Main symptom the transfer rule used: committed, or the current top estimate while it is still WAIT.
   const [transferSymptom, setTransferSymptom] = useState<{ label: string; p: number; committed: boolean } | null>(null);
   const transferKey = useRef('');
+  const transferSeq = useRef(0);
   const [transport, setTransport] = useState<Transport | null>(null);
   const [follow, setFollow] = useState(true);
   const lastTransfer = useRef<Parameters<typeof dispatchApi.transfer>[0] | null>(null);
@@ -437,11 +438,18 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
     sentKey.current = key;
     const myRun = run.current;
     const current = ordersRef.current;
-    const res = await dispatchApi.dispatch({
-      ...call.area.center, dispatch: c.dispatch.label, subtype: c.subtype?.label, symptom: c.symptom?.label,
-      urgency: c.urgency?.label, busy: current.flatMap((o) => (o.unit ? [o.unit.id] : [])), skip: current.length,
-      positions: { ...positions.current },
-    });
+    let res;
+    try {
+      res = await dispatchApi.dispatch({
+        ...call.area.center, dispatch: c.dispatch.label, subtype: c.subtype?.label, symptom: c.symptom?.label,
+        urgency: c.urgency?.label, busy: current.flatMap((o) => (o.unit ? [o.unit.id] : [])), skip: current.length,
+        positions: { ...positions.current },
+      });
+    } catch {
+      // Not a model failure: keep playing and retry the dispatch on the next turn.
+      if (myRun === run.current) { sentKey.current = ''; setError('출동 배차 계산에 실패했습니다. 다음 턴에 다시 시도합니다.'); }
+      return;
+    }
     if (myRun !== run.current) return;
     const at = performance.now();
     setOrders((prev) => [
@@ -463,13 +471,18 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
     if (key === transferKey.current) return;
     transferKey.current = key;
     const myRun = run.current;
+    const seq = ++transferSeq.current;  // only the latest request may update the recommendation
     try {
       const request = { ...call.area.center, turns, subtype: c.subtype?.label, symptom: symptom?.label,
         urgency: c.urgency?.label };
       lastTransfer.current = request;
       const res = await dispatchApi.transfer(request);
-      if (myRun === run.current) { setTransfer(res); setTransferSymptom(symptom); }
-    } catch { /* the dispatch view keeps working without hospital data */ }
+      if (myRun !== run.current || seq !== transferSeq.current) return;
+      setTransfer(res); setTransferSymptom(symptom);
+      if (res.status === 'unavailable' && transferKey.current === key) transferKey.current = '';  // retry next turn
+    } catch {
+      if (myRun === run.current && seq === transferSeq.current) transferKey.current = '';  // retry next turn
+    }
   }, [call]);
 
   // One turn: append it, let both Zoro heads judge the whole prefix, then dispatch / transfer as needed.

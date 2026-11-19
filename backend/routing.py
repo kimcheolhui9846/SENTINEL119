@@ -17,8 +17,19 @@ import httpx
 _TMAP_URL = "https://apis.openapi.sk.com/tmap/routes?version=1&format=json"
 _OSRM_URL = "https://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}"
 _TIMEOUT = 8.0
-_CACHE: dict = {}
-_LIMIT = asyncio.Semaphore(4)
+from collections import OrderedDict
+import weakref
+
+_CACHE: OrderedDict = OrderedDict()
+_CACHE_SIZE = 4000
+_LIMITS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()  # loop -> semaphore
+
+
+def _limit():
+    loop = asyncio.get_running_loop()
+    if loop not in _LIMITS:
+        _LIMITS[loop] = asyncio.Semaphore(4)
+    return _LIMITS[loop]
 # Straight-line fallback: urban speed with a detour factor.
 _ROAD_FACTOR, _SPEED_KMH = 1.3, 25.0
 
@@ -93,10 +104,11 @@ async def route(start, end):
     """{path: [{lat, lon}], distance_m, duration_s, source}; never raises."""
     key = (round(start["lat"], 5), round(start["lon"], 5), round(end["lat"], 5), round(end["lon"], 5))
     if key in _CACHE:
+        _CACHE.move_to_end(key)
         return _CACHE[key]
     tmap_key = _setting("TMAP_APP_KEY")
     result = None
-    async with _LIMIT:
+    async with _limit():
         async with httpx.AsyncClient(timeout=_TIMEOUT, trust_env=False,
                                      headers={"User-Agent": "sentinel119-demo"}) as client:
             for attempt in ((lambda: _tmap(client, tmap_key, start, end)) if tmap_key else None,
@@ -108,6 +120,9 @@ async def route(start, end):
                     break
                 except (httpx.HTTPError, ValueError, KeyError, TypeError):
                     continue
-    result = result or _line(start, end)
+    if result is None:  # a fallback is not cached, so the next request tries the road route again
+        return _line(start, end)
     _CACHE[key] = result
+    if len(_CACHE) > _CACHE_SIZE:
+        _CACHE.popitem(last=False)
     return result

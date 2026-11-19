@@ -122,7 +122,7 @@ async def _directory(client, district):
     out = []
     for h in rows:
         level = h.get("dutyEmclsName") or ""
-        if h.get("dutyEryn") != "1" or level not in LEVELS or not h.get("wgs84Lat"):
+        if h.get("dutyEryn") != "1" or level not in LEVELS or not h.get("hpid") or not h.get("wgs84Lat") or not h.get("wgs84Lon"):
             continue
         out.append({"hpid": h["hpid"], "name": h.get("dutyName", h["hpid"]), "address": h.get("dutyAddr", ""),
                     "level": level, "district": district, "lat": float(h["wgs84Lat"]), "lon": float(h["wgs84Lon"]),
@@ -155,7 +155,7 @@ async def _live_district(client, district):
     for h in listing:
         hpid = h.get("hpid")
         level = h.get("dutyEmclsName") or ""
-        if not hpid or level not in LEVELS or not h.get("wgs84Lat"):
+        if not hpid or level not in LEVELS or not h.get("wgs84Lat") or not h.get("wgs84Lon"):
             continue
         bed = beds_by.get(hpid, {})
         row = serious_by.get(hpid, {})
@@ -266,7 +266,10 @@ async def zoro_choice(turns, rule, hospitals, drop=()):
             data = response.json()
     except (httpx.HTTPError, ValueError):
         return None
-    probabilities = data["results"]["probabilities"]
+    try:
+        probabilities = {h["hpid"]: float(data["results"]["probabilities"][h["hpid"]]) for h in hospitals}
+    except (KeyError, TypeError, ValueError):
+        return None
     return {"probabilities": probabilities, "choice": max(probabilities, key=probabilities.get),
             "latency_ms": data.get("latency_ms"), "question": question}
 
@@ -336,7 +339,7 @@ async def explain(turns, rule, hospitals, full):
     ablated = await asyncio.gather(*(zoro_choice(turns, rule, hospitals, drop=(g,)) for g in GROUPS))
     effects = []
     for group, result in zip(GROUPS, ablated):
-        if result is None:
+        if result is None or chosen not in result["probabilities"]:
             continue
         effects.append({"group": GROUPS[group], "without": result["probabilities"][chosen],
                         "delta": full["probabilities"][chosen] - result["probabilities"][chosen],
@@ -367,6 +370,8 @@ async def zoro_reason(turns, rule, hospitals, question):
     except (httpx.HTTPError, ValueError):
         return None
     names = {h["hpid"]: h["name"] for h in hospitals}
+    if not isinstance(data.get("reasoned"), dict) or not data["reasoned"]:
+        return None  # cut-off reasoning is not re-scored by the server
     choice = max(data["reasoned"], key=data["reasoned"].get)
     return {"text": data["reasoning"], "finished": data["reasoning_finished"], "tokens": data["reasoning_tokens"],
             "ms": data["reasoning_ms"], "direct": data["direct"], "reasoned": data["reasoned"], "choice": choice,
@@ -403,7 +408,12 @@ async def transfer(body: TransferRequest):
     if body.explain and choice:
         if body.reason:
             reason, reasoned = await asyncio.gather(explain(turns, rule, hospitals, choice),
-                                                    zoro_reason(turns, rule, hospitals, choice["question"]))
+                                                    zoro_reason(turns, rule, hospitals, choice["question"]),
+                                                    return_exceptions=True)
+        if isinstance(reason, Exception):
+            raise reason
+        if isinstance(reasoned, Exception):
+            reasoned = None
         else:
             reason, reasoned = await explain(turns, rule, hospitals, choice), None
         reason["reasoned"] = reasoned

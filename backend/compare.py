@@ -30,6 +30,15 @@ class CompareRequest(BaseModel):
 
 
 def _calls():
+    """Comparison calls come from the same cached, validated loader as the session scenarios."""
+    from .scenarios import _call_files
+    return {key: {"id": key, "title": c["title"], "summary": c["summary"], "private": c["private"], "gold": c["gold"],
+                  "area": c["area"], "turns": [{"speaker": 0 if who == "수보요원" else 1, "text": text}
+                                               for who, text in c["turns"]]}
+            for key, c in _call_files().items()}
+
+
+def _calls_uncached():
     calls = {}
     for root in filter(None, os.getenv("SENTINEL_SCENARIO_DIRS", "").split(os.pathsep)):
         for path in sorted(Path(root).glob("*.json")):

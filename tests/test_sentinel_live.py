@@ -1,5 +1,8 @@
 """Confidence commits, hierarchy and the SENTINEL_ZORO adapter used by live mode."""
+import json
+from pathlib import Path
 import os
+import tempfile
 import time
 import unittest
 from unittest import mock
@@ -88,10 +91,21 @@ class LiveSessionTests(unittest.TestCase):
             view = service.get(view["id"])
         self.fail("processing did not finish")
 
+    def call_dir(self):
+        """A live-only call file: no reviewed fixture, so the model's confidence decides."""
+        folder = tempfile.mkdtemp()
+        Path(folder, "c.json").write_text(json.dumps({"id": "c1", "title": "통화", "address": "서울특별시 중랑구 중화동",
+                                                      "turns": [{"speaker": 0, "text": "119입니다."}]},
+                                                     ensure_ascii=False), encoding="utf-8")
+        patcher = mock.patch.dict(os.environ, {"SENTINEL_SCENARIO_DIRS": folder})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_typed_turns_are_judged_with_hierarchy(self):
+        self.call_dir()
         service = SessionService(inference=FakeInference())
         self.addCleanup(service.close)
-        view = service.create("staged", "live")
+        view = service.create("c1", "live")
         view = self.wait(service, service.event(view["id"], "text", view["version"], text="여보세요"))
         self.assertEqual(view["decisions"]["dispatch"]["status"], "WAIT")
         view = self.wait(service, service.event(view["id"], "text", view["version"], text="어머니가 쓰러졌어요"))
@@ -99,6 +113,13 @@ class LiveSessionTests(unittest.TestCase):
         self.assertEqual(view["decisions"]["urgency"]["status"], "COMMIT")
         self.assertEqual((view["hierarchy"]["subtype"]["status"], view["hierarchy"]["subtype"]["choice"]), ("COMMIT", "심정지"))
         self.assertEqual(view["hierarchy"]["symptom"]["status"], "WAIT")
+
+    def test_synthetic_scenarios_keep_reviewed_support_in_live_mode(self):
+        service = SessionService(inference=FakeInference())
+        self.addCleanup(service.close)
+        view = service.create("staged", "live")
+        view = self.wait(service, service.event(view["id"], "text", view["version"], text="어머니가 쓰러졌어요"))
+        self.assertEqual(view["decisions"]["dispatch"]["status"], "WAIT")
 
     def test_simulation_typed_turns_stay_unjudged(self):
         service = SessionService(inference=FakeInference())

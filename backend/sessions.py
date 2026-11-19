@@ -179,7 +179,7 @@ class SessionService:
         session = _Session(
             session_id, scenario, mode,
             Guard(session_id, max_response_age_s=_RESPONSE_MAX_AGE_S,
-                  thresholds=_THRESHOLDS if mode == "live" else None),
+                  thresholds=_THRESHOLDS if mode == "live" and scenario.get("live_only") else None),
             get_frame(scenario_id, 0),
         )
         self._observe_hospitals(session, session.frame)
@@ -532,8 +532,10 @@ class SessionService:
         questions = {"subtype": _SUBTYPE_OF.get(parent), "symptom": "ems_symptom" if parent == "구급" else None}
         for slot, qid in questions.items():
             previous = session.hierarchy.get(slot)
-            if qid is None or qid not in outputs:
+            if qid is None:  # the parent type changed or is not committed: the slot closes
                 session.hierarchy.pop(slot, None)
+                continue
+            if qid not in outputs:  # a reply without this question keeps the previous state
                 continue
             labels = outputs[qid]["labels"]
             probabilities = {labels.get(key, key): value for key, value in outputs[qid]["probabilities"].items()}

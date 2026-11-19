@@ -33,15 +33,28 @@ _CATALOG = {
 }
 
 
+_FILES_CACHE: dict = {}
+
+
 def _call_files():
+    """Parsed call files, cached by (path, mtime); malformed files are skipped, not fatal."""
+    paths = [path for root in filter(None, os.getenv("SENTINEL_SCENARIO_DIRS", "").split(os.pathsep))
+             for path in sorted(Path(root).glob("*.json"))]
+    stamp = tuple((str(p), p.stat().st_mtime_ns) for p in paths)
+    if _FILES_CACHE.get("stamp") == stamp:
+        return _FILES_CACHE["calls"]
     calls = {}
-    for root in filter(None, os.getenv("SENTINEL_SCENARIO_DIRS", "").split(os.pathsep)):
-        for path in sorted(Path(root).glob("*.json")):
+    for path in paths:
+        try:
             data = json.loads(path.read_text(encoding="utf-8"))
             turns = [("수보요원" if turn["speaker"] == 0 else "신고자", turn["text"]) for turn in data["turns"]]
             calls[data["id"]] = {"title": data["title"], "summary": data.get("summary", ""), "turns": turns,
                                  "gold": data.get("gold"), "private": "private" in path.parts,
-                                 "area": find_area(data.get("address"))}
+                                 # same seeded incident point as the comparison / dispatch view
+                                 "area": find_area(data.get("address"), seed=data["id"])}
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    _FILES_CACHE.update(stamp=stamp, calls=calls)
     return calls
 
 
