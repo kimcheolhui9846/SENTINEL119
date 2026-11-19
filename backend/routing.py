@@ -9,6 +9,8 @@ import asyncio
 import math
 import os
 
+from pathlib import Path
+
 import httpx
 
 
@@ -19,6 +21,25 @@ _CACHE: dict = {}
 _LIMIT = asyncio.Semaphore(4)
 # Straight-line fallback: urban speed with a detour factor.
 _ROAD_FACTOR, _SPEED_KMH = 1.3, 25.0
+
+
+_ENV_FILE = Path(__file__).resolve().parents[1] / ".env.local"  # git-ignored; KEY=value lines
+
+
+def _setting(name):
+    """Environment first, then the repository's git-ignored .env.local (never logged or returned)."""
+    value = os.getenv(name, "").strip()
+    if value or not _ENV_FILE.is_file():
+        return value
+    for line in _ENV_FILE.read_text(encoding="utf-8-sig").splitlines():
+        key, sep, raw = line.partition("=")
+        if sep and key.strip() == name:
+            return raw.strip().strip('"').strip("'")
+    return ""
+
+
+def provider():
+    return "tmap" if _setting("TMAP_APP_KEY") else "osrm"
 
 
 def _haversine_km(a, b):
@@ -73,7 +94,7 @@ async def route(start, end):
     key = (round(start["lat"], 5), round(start["lon"], 5), round(end["lat"], 5), round(end["lon"], 5))
     if key in _CACHE:
         return _CACHE[key]
-    tmap_key = os.getenv("TMAP_APP_KEY", "").strip()
+    tmap_key = _setting("TMAP_APP_KEY")
     result = None
     async with _LIMIT:
         async with httpx.AsyncClient(timeout=_TIMEOUT, trust_env=False,

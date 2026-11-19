@@ -53,3 +53,7 @@
   .dispatch-map-wrap { height: 60vh; }
   .dispatch-side { max-height: none; }
 }
+.dispatch-marker.is-patrol { opacity: 0.95; }
+.dispatch-marker.is-patrol svg { width: 1.05rem; height: 1.05rem; }
+.dispatch-legend .legend-note::before { display: none; }
+.dispatch-legend .legend-note { color: #485d6e; }

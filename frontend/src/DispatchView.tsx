@@ -1,3 +1,4 @@
+import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as L from 'leaflet';
 import { api } from './compareApi';
@@ -5,7 +6,7 @@ import type { CompareScenario, ScenarioDetail } from './compareApi';
 import { advance, emptyZoro, THRESHOLD } from './CompareView';
 import type { ZoroState } from './CompareView';
 import { dispatchApi } from './dispatchApi';
-import type { Assignment, FleetUnit, Point } from './dispatchApi';
+import type { Assignment, FleetUnit, Patrol, Point } from './dispatchApi';
 import 'leaflet/dist/leaflet.css';
 import './drill.css';
 import './dispatch.css';
@@ -39,8 +40,9 @@ function moving(id: string, path: Point[], durationS: number, start: number): Mo
   for (let i = 1; i < pts.length; i += 1) cumulative.push(cumulative[i - 1] + pts[i - 1].distanceTo(pts[i]));
   return { id, path: pts, cumulative, total: cumulative.at(-1) ?? 0, start, ms: Math.max(5000, (durationS * 1000) / TIME_SCALE) };
 }
-function positionAt(m: Moving, now: number) {
-  const t = Math.min(1, (now - m.start) / m.ms);
+function positionAt(m: Moving, now: number, loop = false) {
+  const raw = (now - m.start) / m.ms;
+  const t = loop ? raw - Math.floor(raw) : Math.min(1, raw);
   const d = m.total * t;
   const i = Math.max(1, m.cumulative.findIndex((c) => c >= d));
   const [a, b] = [m.path[i - 1], m.path[i] ?? m.path[i - 1]];
@@ -52,10 +54,13 @@ function positionAt(m: Moving, now: number) {
 interface Line { speaker: 0 | 1; text: string; note?: string; base?: string; ms?: number }
 interface Order extends Assignment { turn: number; dispatchedAt: number }
 
-function DispatchMap({ fleet, area, orders }: { fleet: FleetUnit[]; area: ScenarioDetail['area'] | null; orders: Order[] }) {
+function DispatchMap({ fleet, area, orders, patrols, positions }: {
+  fleet: FleetUnit[]; area: ScenarioDetail['area'] | null; orders: Order[]; patrols: Patrol[];
+  positions: React.MutableRefObject<Record<string, Point>>;
+}) {
   const element = useRef<HTMLDivElement>(null);
   const state = useRef<{ map: L.Map; markers: Map<string, L.Marker>; incident?: L.LayerGroup; routes: L.LayerGroup;
-    moving: Map<string, Moving> } | null>(null);
+    moving: Map<string, Moving>; patrol: Map<string, Moving> } | null>(null);
   const [tileError, setTileError] = useState(false);
 
   useEffect(() => {
@@ -73,11 +78,19 @@ function DispatchMap({ fleet, area, orders }: { fleet: FleetUnit[]; area: Scenar
       }
     }).catch(() => {});
     const routes = L.layerGroup().addTo(map);
-    state.current = { map, markers: new Map(), routes, moving: new Map() };
+    state.current = { map, markers: new Map(), routes, moving: new Map(), patrol: new Map() };
     let frame = 0;
     const render = (now: number) => {
       const s = state.current;
-      if (s) for (const m of s.moving.values()) s.markers.get(m.id)?.setLatLng(positionAt(m, now).at);
+      if (s) {
+        for (const m of s.moving.values()) s.markers.get(m.id)?.setLatLng(positionAt(m, now).at);
+        for (const m of s.patrol.values()) {
+          if (s.moving.has(m.id)) continue;
+          const at = positionAt(m, now, true).at;
+          s.markers.get(m.id)?.setLatLng(at);
+          positions.current[m.id] = { lat: at.lat, lon: at.lng };
+        }
+      }
       frame = requestAnimationFrame(render);
     };
     frame = requestAnimationFrame(render);
@@ -98,6 +111,25 @@ function DispatchMap({ fleet, area, orders }: { fleet: FleetUnit[]; area: Scenar
         .bindTooltip(unit.name).addTo(s.map));
     }
   }, [fleet]);
+
+  // Nearby units drive road loops (demo effect) until one is dispatched.
+  useEffect(() => {
+    const s = state.current;
+    if (!s) return;
+    for (const id of s.patrol.keys()) {
+      const unit = fleet.find((u) => u.id === id);
+      if (unit && !s.moving.has(id)) { s.markers.get(id)?.setLatLng([unit.lat, unit.lon]).setIcon(icon(unit.kind, 'is-idle', 22)); }
+    }
+    s.patrol.clear();
+    positions.current = {};
+    const start = performance.now();
+    for (const p of patrols) {
+      const unit = fleet.find((u) => u.id === p.id);
+      if (!unit || p.path.length < 2) continue;
+      s.patrol.set(p.id, { ...moving(p.id, p.path, p.duration_s, start - Math.random() * 20000), ms: Math.max(20000, (p.duration_s * 1000) / TIME_SCALE) });
+      if (!s.moving.has(p.id)) s.markers.get(p.id)?.setIcon(icon(unit.kind, 'is-patrol', 26));
+    }
+  }, [patrols, fleet, positions]);
 
   // Incident area: the call's 법정동 and its centre.
   useEffect(() => {
@@ -131,6 +163,7 @@ function DispatchMap({ fleet, area, orders }: { fleet: FleetUnit[]; area: Scenar
       path.forEach((p) => bounds.extend(p));
       const marker = s.markers.get(order.unit.id);
       if (marker && !s.moving.has(order.unit.id)) {
+        delete positions.current[order.unit.id];
         marker.setIcon(icon(order.kind, 'is-dispatched', 34));
         marker.setZIndexOffset(1500);
         s.moving.set(order.unit.id, moving(order.unit.id, order.route.path, order.route.duration_s, order.dispatchedAt));
@@ -141,11 +174,15 @@ function DispatchMap({ fleet, area, orders }: { fleet: FleetUnit[]; area: Scenar
         s.moving.delete(id);
         const unit = fleet.find((u) => u.id === id);
         const marker = s.markers.get(id);
-        if (unit && marker) { marker.setLatLng(m.path[0]); marker.setIcon(icon(unit.kind, 'is-idle', 22)); marker.setZIndexOffset(0); }
+        if (unit && marker) {
+          marker.setLatLng(s.patrol.has(id) ? m.path[0] : [unit.lat, unit.lon]);
+          marker.setIcon(icon(unit.kind, s.patrol.has(id) ? 'is-patrol' : 'is-idle', s.patrol.has(id) ? 26 : 22));
+          marker.setZIndexOffset(0);
+        }
       }
     }
     if (orders.length) s.map.flyToBounds(bounds, { padding: [50, 50], maxZoom: 15.5, duration: 1.0 });
-  }, [orders, area, fleet]);
+  }, [orders, area, fleet, positions]);
 
   return (
     <div className="dispatch-map-wrap">
@@ -154,6 +191,7 @@ function DispatchMap({ fleet, area, orders }: { fleet: FleetUnit[]; area: Scenar
       <ul className="dispatch-legend" aria-label="범례">
         {(['ambulance', 'pump', 'rescue'] as const).map((k) => <li key={k} data-kind={k}>{UNIT_LABEL[k]}</li>)}
         <li data-kind="caller">신고 위치(법정동)</li>
+        {patrols.length ? <li className="legend-note">주변 차량 순찰은 시연용 연출</li> : null}
       </ul>
     </div>
   );
@@ -179,6 +217,8 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
   const [error, setError] = useState<string | null>(null);
   const [showGold, setShowGold] = useState(false);
   const [now, setNow] = useState(performance.now());
+  const [patrols, setPatrols] = useState<Patrol[]>([]);
+  const positions = useRef<Record<string, Point>>({});
   const run = useRef(0);
   const sentKey = useRef('');
   const zoro = useRef({ sft, base });
@@ -197,7 +237,11 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
   useEffect(() => {
     if (!callId) return;
     reset();
-    api.scenario(callId).then(setCall).catch(() => setError('통화를 불러오지 못했습니다.'));
+    setPatrols([]);
+    api.scenario(callId).then((detail) => {
+      setCall(detail);
+      if (detail.area) dispatchApi.patrols(detail.area.center).then((p) => setPatrols(p.patrols)).catch(() => setPatrols([]));
+    }).catch(() => setError('통화를 불러오지 못했습니다.'));
   }, [callId, reset]);
 
   // Dispatch when the type commits; subtype / urgency / symptom commits may add units (e.g. 심정지 → 펌뷸런스).
@@ -212,6 +256,7 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
     const res = await dispatchApi.dispatch({
       ...call.area.center, dispatch: c.dispatch.label, subtype: c.subtype?.label, symptom: c.symptom?.label,
       urgency: c.urgency?.label, busy: current.flatMap((o) => (o.unit ? [o.unit.id] : [])), skip: current.length,
+      positions: { ...positions.current },
     });
     if (myRun !== run.current) return;
     const at = performance.now();
@@ -283,7 +328,7 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
       </div>
       {error ? <div className="alert" role="alert">{error}</div> : null}
       <div className="dispatch-grid">
-        <DispatchMap fleet={fleet} area={lines.length ? call?.area ?? null : null} orders={orders} />
+        <DispatchMap fleet={fleet} area={lines.length ? call?.area ?? null : null} orders={orders} patrols={patrols} positions={positions} />
         <aside className="dispatch-side">
           <section className="panel dispatch-card">
             <header className="panel-header"><h2 className="section-title">SENTINEL_ZORO 판단</h2>

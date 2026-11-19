@@ -13,13 +13,14 @@ import asyncio
 from functools import lru_cache
 import json
 import math
+import zlib
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from .routing import route
+from .routing import provider, route
 
 
 STATIONS_PATH = Path(__file__).with_name("data") / "seoul-fire-stations.json"
@@ -92,10 +93,12 @@ def _km(a, b):
     return math.hypot(dx, dy)
 
 
-async def assign(incident, steps, busy=()):
-    """Pick, per requested unit, the free unit of that kind with the shortest road ETA."""
+async def assign(incident, steps, busy=(), positions=None):
+    """Pick, per requested unit, the free unit of that kind with the shortest road ETA.
+
+    ``positions`` maps unit IDs to where a patrolling unit is now; its route starts there."""
     taken, out = set(busy), []
-    units = fleet()
+    units = [{**u, **(positions or {}).get(u["id"], {})} for u in fleet()]
     for step in steps:
         pool = sorted((u for u in units if u["kind"] == step["kind"] and u["id"] not in taken),
                       key=lambda u: _km(u, incident))[:_CANDIDATES_PER_KIND]
@@ -119,14 +122,38 @@ class DispatchRequest(BaseModel):
     urgency: str | None = None
     busy: list[str] = []
     skip: Annotated[int, Field(ge=0)] = 0  # leading plan steps already dispatched
+    positions: dict[str, dict[str, float]] = {}  # current positions of patrolling units
+
+
+def _waypoint(unit, km, index):
+    """A deterministic point ``km`` away from the station for a patrol loop."""
+    bearing = math.radians((zlib.crc32(unit["id"].encode()) % 360 + index * 137) % 360)
+    return {"lat": unit["lat"] + km * math.cos(bearing) / 111.0,
+            "lon": unit["lon"] + km * math.sin(bearing) / (111.0 * math.cos(math.radians(unit["lat"])))}
+
+
+async def patrols(center, radius_km=5.0, limit=14):
+    """Road loops station -> waypoint -> station for units near ``center`` (demo effect, not real patrols)."""
+    near = sorted((u for u in fleet() if _km(u, center) <= radius_km), key=lambda u: _km(u, center))[:limit]
+    async def loop(unit):
+        point = _waypoint(unit, 1.2, len(unit["id"]))
+        out, back = await asyncio.gather(route(unit, point), route(point, unit))
+        return {"id": unit["id"], "path": out["path"] + back["path"][1:],
+                "duration_s": out["duration_s"] + back["duration_s"], "source": out["source"]}
+    return await asyncio.gather(*(loop(u) for u in near))
 
 
 router = APIRouter(prefix="/api/map")
 
 
+@router.get("/patrols")
+async def get_patrols(lat: Annotated[float, Query(ge=37.0, le=38.0)], lon: Annotated[float, Query(ge=126.5, le=127.5)]):
+    return {"patrols": await patrols({"lat": lat, "lon": lon}), "note": "시연용 순찰 경로 (실제 차량 위치 아님)"}
+
+
 @router.get("/fleet")
 def get_fleet():
-    return {"units": fleet(), "attribution": stations()[1]}
+    return {"units": fleet(), "attribution": stations()[1], "routing": provider()}
 
 
 @router.post("/dispatch")
@@ -137,4 +164,6 @@ async def dispatch(body: DispatchRequest):
         raise HTTPException(422, "unknown_dispatch") from None
     incident = {"lat": body.lat, "lon": body.lon}
     return {"incident": incident, "plan": steps,
-            "assignments": await assign(incident, steps[body.skip:], body.busy)}
+            "assignments": await assign(incident, steps[body.skip:], body.busy,
+                                        {k: {"lat": v["lat"], "lon": v["lon"]} for k, v in body.positions.items()
+                                         if {"lat", "lon"} <= v.keys()})}
