@@ -4,7 +4,10 @@ import type { CompareScenario as ScenarioSummary, LlmResponse, ScenarioDetail, S
 
 // Commit thresholds chosen on dev turn prefixes (63 calls, E1) by the spec reward: +1 correct, -4 wrong, 0 never.
 // The same thresholds apply to both decision models.
-const THRESHOLD = { dispatch: 0.9, subtype: 0.85, urgency: 0.85, symptom: 0.8 } as const;
+// The SFT head is under-confident on fire (minority class): its fire probability tops out near 0.8 on clear
+// fire calls. Provisional per-type dispatch threshold until the final checkpoint is re-calibrated on dev.
+export const DISPATCH_THRESHOLD: Record<string, number> = { fire: 0.75 };
+export const THRESHOLD = { dispatch: 0.9, subtype: 0.85, urgency: 0.85, symptom: 0.8 } as const;
 // Measured on those dev prefixes at these thresholds: precision of commits (commit rate).
 const DEV_PRECISION = {
   calls: 63,
@@ -18,17 +21,17 @@ const pct = (x: number) => `${Math.round(x * 100)}%`;
 const TYPE_MS = 420;
 const NEXT_DELAY_MS = 900;
 const SUBTYPE_OF: Record<string, "ems_subtype" | "rescue_subtype"> = { ems: "ems_subtype", rescue: "rescue_subtype" };
-type Labels = StreamResponse["labels"];
-type ZoroId = "sft" | "base";
+export type Labels = StreamResponse["labels"];
+export type ZoroId = "sft" | "base";
 type Task = "dispatch" | "subtype" | "urgency" | "symptom";
 
 interface Commit { key: string; label: string; p: number; turn: number }
-interface ZoroState {
+export interface ZoroState {
   probs: StreamResponse["results"]["sft"]["probabilities"] | null;
   commits: Partial<Record<Task, Commit>>;
   latencies: number[];
 }
-interface LlmState { answer: LlmResponse["answer"] | null; raw: string; latencies: number[]; pending: boolean }
+export interface LlmState { answer: LlmResponse["answer"] | null; raw: string; latencies: number[]; pending: boolean }
 interface TurnLog {
   speaker: 0 | 1;
   text: string;
@@ -36,18 +39,19 @@ interface TurnLog {
   ms: Partial<Record<ZoroId | "llm", number>>;
 }
 
-const emptyZoro = (): ZoroState => ({ probs: null, commits: {}, latencies: [] });
-const emptyLlm = (): LlmState => ({ answer: null, raw: "", latencies: [], pending: false });
+export const emptyZoro = (): ZoroState => ({ probs: null, commits: {}, latencies: [] });
+export const emptyLlm = (): LlmState => ({ answer: null, raw: "", latencies: [], pending: false });
 const top = (dist?: Record<string, number>) =>
   dist ? (Object.entries(dist).sort((a, b) => b[1] - a[1])[0] as [string, number]) : undefined;
 const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
 
-function advance(state: ZoroState, probs: ZoroState["probs"], turn: number, labels: Labels) {
+export function advance(state: ZoroState, probs: ZoroState["probs"], turn: number, labels: Labels) {
   const commits = { ...state.commits };
   const fresh: string[] = [];
   const tryCommit = (task: Task, qid: string, threshold: number, name: string) => {
     const best = top(probs?.[qid as keyof NonNullable<ZoroState["probs"]>]);
-    if (!commits[task] && best && best[1] >= threshold) {
+    const needed = task === "dispatch" && best ? DISPATCH_THRESHOLD[best[0]] ?? threshold : threshold;
+    if (!commits[task] && best && best[1] >= needed) {
       const label = labels[qid]?.[best[0]] ?? best[0];
       commits[task] = { key: best[0], label, p: best[1], turn };
       fresh.push(`${name} ${label}`);
@@ -63,7 +67,7 @@ function advance(state: ZoroState, probs: ZoroState["probs"], turn: number, labe
   return { next: { ...state, probs, commits }, note: fresh.length ? `COMMIT · ${fresh.join(" · ")}` : "WAIT" };
 }
 
-function llmNote(answer: LlmResponse["answer"], labels: Labels) {
+export function llmNote(answer: LlmResponse["answer"], labels: Labels) {
   const parts = [
     answer.dispatch && labels.dispatch[answer.dispatch],
     answer.subtype && answer.subtype_question && labels[answer.subtype_question]?.[answer.subtype],
@@ -110,7 +114,7 @@ function Latency({ last, list, busy }: { last?: number; list: number[]; busy: bo
   );
 }
 
-function ZoroPanel({ id, name, note, model, labels, busy }: {
+export function ZoroPanel({ id, name, note, model, labels, busy }: {
   id: ZoroId; name: string; note: string; model: ZoroState; labels: Labels | null; busy: boolean;
 }) {
   const probs = model.probs ?? undefined;
@@ -147,7 +151,7 @@ function ZoroPanel({ id, name, note, model, labels, busy }: {
   );
 }
 
-function LlmPanel({ state, labels }: { state: LlmState; labels: Labels | null }) {
+export function LlmPanel({ state, labels }: { state: LlmState; labels: Labels | null }) {
   const a = state.answer;
   const subQ = a?.dispatch ? SUBTYPE_OF[a.dispatch] : undefined;
   return (

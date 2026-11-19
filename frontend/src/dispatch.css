@@ -1,0 +1,55 @@
+.dispatch { display: grid; gap: 12px; }
+.dispatch-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.dispatch-bar label { display: grid; gap: 2px; font-size: 13px; color: var(--text-faint); }
+.dispatch-bar select { min-height: 36px; max-width: min(560px, 90vw); padding: 0 10px; border-radius: var(--radius);
+  border: 1px solid var(--line-strong); background: var(--panel-2); color: var(--text); font: inherit; }
+.dispatch-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: 12px; align-items: start; }
+.dispatch-map-wrap { position: relative; height: calc(100vh - 170px); min-height: 520px; border-radius: var(--radius-lg);
+  overflow: hidden; border: 1px solid var(--line); isolation: isolate; }
+.dispatch-map.leaflet-container { width: 100%; height: 100%; background: #e4ece9; font-family: inherit; color: #192b3d; }
+.dispatch-map .leaflet-tile-pane { filter: saturate(0.7); }
+.dispatch-map-alert { position: absolute; top: 8px; left: 8px; z-index: 500; background: #fff; color: #7a2015; padding: 4px 8px; border-radius: 4px; font-size: 13px; }
+.dispatch-legend { position: absolute; left: 10px; bottom: 22px; z-index: 500; display: flex; gap: 10px; list-style: none; margin: 0;
+  padding: 6px 10px; background: #fcfdffe6; color: #192b3d; border-radius: 6px; font-size: 12px; }
+.dispatch-legend li::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 4px; background: var(--c); vertical-align: -1px; }
+.dispatch-legend [data-kind="ambulance"] { --c: #006c66; }
+.dispatch-legend [data-kind="pump"] { --c: #a23e21; }
+.dispatch-legend [data-kind="rescue"] { --c: #8a5a00; }
+.dispatch-legend [data-kind="caller"] { --c: #613ca4; }
+.dispatch-marker--ambulance { --marker-color: #006c66; }
+.dispatch-marker--pump { --marker-color: #a23e21; }
+.dispatch-marker--rescue { --marker-color: #8a5a00; }
+.dispatch-marker--caller { --marker-color: #613ca4; border-radius: 50%; box-shadow: 0 0 0 4px #613ca466, 0 3px 7px #1a344795; }
+.dispatch-marker.is-idle { opacity: 0.55; }
+.dispatch-marker.is-idle svg { width: 0.9rem; height: 0.9rem; }
+.dispatch-marker.is-dispatched { opacity: 1; box-shadow: 0 0 0 2px var(--marker-color), 0 0 0 5px #fff, 0 4px 10px #1a344799; }
+.dispatch-side { display: grid; gap: 10px; max-height: calc(100vh - 170px); overflow-y: auto; padding-right: 2px; }
+.dispatch-card { display: grid; gap: 8px; }
+.dispatch-decisions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.dispatch-decision { display: grid; gap: 2px; padding: 8px 10px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--panel-2); }
+.dispatch-decision strong { font-size: 18px; }
+.dispatch-decision[data-state="wait"] strong { color: var(--amber); }
+.dispatch-decision[data-state="commit"] { border-color: var(--mint); background: var(--mint-bg); }
+.dispatch-decision[data-state="commit"] strong { color: var(--mint); }
+.dd-name, .dd-meta { font-size: 12px; color: var(--text-faint); }
+.dispatch-orders { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.dispatch-orders li { padding: 8px 10px; border-radius: var(--radius); background: var(--panel-2); border-left: 4px solid var(--c); }
+.dispatch-orders li[data-kind="ambulance"] { --c: #2fb3a6; }
+.dispatch-orders li[data-kind="pump"] { --c: #e06a46; }
+.dispatch-orders li[data-kind="rescue"] { --c: #d39a2c; }
+.dispatch-orders p { margin: 2px 0 0; font-size: 13px; }
+.do-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.do-head .tabular { font-size: 13px; color: var(--mint); white-space: nowrap; }
+.do-source { color: var(--text-faint); font-size: 12px !important; }
+.dispatch-transcript ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 260px; overflow-y: auto; font-size: 14px; }
+.dispatch-transcript li[data-speaker="0"] { color: var(--text-dim); }
+.dispatch-transcript .who { font-size: 12px; color: var(--text-faint); margin-right: 4px; }
+.dt-note { display: block; font-size: 12px; font-weight: 700; }
+.dt-note.is-wait { color: var(--amber); }
+.dt-note.is-commit { color: var(--mint); }
+.dispatch-gold { font-weight: 700; color: var(--amber); }
+@media (max-width: 1100px) {
+  .dispatch-grid { grid-template-columns: minmax(0, 1fr); }
+  .dispatch-map-wrap { height: 60vh; }
+  .dispatch-side { max-height: none; }
+}

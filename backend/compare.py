@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import httpx
+
+from .call_area import find_area
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -34,6 +36,7 @@ def _calls():
             data = json.loads(path.read_text(encoding="utf-8"))
             calls[data["id"]] = {"id": data["id"], "title": data["title"], "summary": data.get("summary", ""),
                                  "private": "private" in path.parts, "gold": data.get("gold"),
+                                 "area": find_area(data.get("address")),
                                  "turns": [{"speaker": 1 if t["speaker"] else 0, "text": t["text"]} for t in data["turns"]]}
     return calls
 
@@ -64,7 +67,8 @@ router = APIRouter(prefix="/api/compare")
 
 @router.get("")
 def compare_calls():
-    return {"scenarios": [{key: call[key] for key in ("id", "title", "summary", "private")}
+    return {"scenarios": [{**{key: call[key] for key in ("id", "title", "summary", "private")},
+                           "area": f"{call['area']['district']} {call['area']['dong']}" if call["area"] else None}
                           for call in _calls().values()]}
 
 

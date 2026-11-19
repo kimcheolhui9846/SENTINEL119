@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .hospital_directory import DEFAULT_DISTRICT, SEOUL_DISTRICTS, HospitalDirectory
 from .compare import router as compare_router
+from .dispatch_map import router as dispatch_router
 from .scenarios import list_scenarios
 from .sessions import SessionError, SessionService
 
@@ -61,6 +62,7 @@ def create_app(inference=None) -> FastAPI:
         return JSONResponse(status_code=error.status, content={"detail": error.code}, headers=headers)
 
     app.include_router(compare_router)
+    app.include_router(dispatch_router)
 
     @app.get("/api/scenarios")
     def scenarios():

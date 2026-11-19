@@ -1,7 +1,9 @@
 // Model comparison tab: one transcript prefix to the plain LLM, SENTINEL_ZORO and base Zoro.
-export interface CompareScenario { id: string; title: string; summary: string; private?: boolean }
-export interface ScenarioDetail extends CompareScenario {
+import type { CallArea } from './dispatchApi';
+export interface CompareScenario { id: string; title: string; summary: string; private?: boolean; area?: string | null }
+export interface ScenarioDetail extends Omit<CompareScenario, 'area'> {
   gold?: Record<string, string> | null;
+  area?: CallArea | null;
   turns: { speaker: 0 | 1; text: string }[];
 }
 export interface LlmResponse {
