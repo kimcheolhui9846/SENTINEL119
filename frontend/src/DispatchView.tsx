@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as L from 'leaflet';
 import { api } from './compareApi';
 import type { CompareScenario, ScenarioDetail } from './compareApi';
-import { advance, DISPATCH_THRESHOLD, emptyZoro, THRESHOLD } from './CompareView';
+import { advance, DISPATCH_THRESHOLD, emptyZoro, SUBTYPE_THRESHOLD, THRESHOLD } from './CompareView';
 import type { Labels, ZoroState } from './CompareView';
 import { dispatchApi } from './dispatchApi';
 import type { Assignment, FleetUnit, Patrol, Point, TransferHospital, TransferResponse } from './dispatchApi';
@@ -587,7 +587,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
   const pct = (x: number) => `${Math.round(x * 100)}%`;
   const dist = (qid: string) => probs?.[qid as keyof NonNullable<typeof probs>] as Record<string, number> | undefined;
   const need = (qid: string, key: string) => qid === 'dispatch' ? DISPATCH_THRESHOLD[key] ?? THRESHOLD.dispatch
-    : qid === 'urgency' ? THRESHOLD.urgency : qid === 'ems_symptom' ? THRESHOLD.symptom : THRESHOLD.subtype;
+    : qid === 'urgency' ? THRESHOLD.urgency : qid === 'ems_symptom' ? THRESHOLD.symptom : SUBTYPE_THRESHOLD[qid] ?? THRESHOLD.subtype;
 
   // Banner: what the model decided on the latest turn, in one line.
   let banner: { state: 'wait' | 'commit' | 'idle'; title: string; detail: React.ReactNode };
