@@ -350,7 +350,11 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
   }, [playing, busy, done, step, lines.length]);
 
   const transcript = useRef<HTMLOListElement>(null);
-  useEffect(() => { transcript.current?.lastElementChild?.scrollIntoView({ block: 'nearest' }); }, [lines.length]);
+  // Scroll only inside the transcript box; scrollIntoView would also move the page to the box.
+  useEffect(() => {
+    const box = transcript.current;
+    if (box) box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+  }, [lines.length]);
 
   const c = sft.commits;
   const probs = sft.probs;
