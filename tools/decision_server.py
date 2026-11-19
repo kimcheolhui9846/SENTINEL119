@@ -8,8 +8,10 @@ rendering, question text and a checkpoint's recorded prompt are exactly those us
   POST /v1/stream    turn-wise dispatch / subtype / urgency (+ symptom) for sft and base on one prefix
   POST /v1/llm       plain-LLM baseline (--llm, e.g. Qwen/Qwen3.5-4B): generated JSON answer for the same prefix
   GET  /v1/health    pinned model identity, available variants and checkpoint hashes
-  POST /v1/reason     Zoro-1 "reasoned action": the same weights write their reasoning (<think>), which is added
-                      to the state, then the released head re-scores the options (zoro_decide.py protocol)
+  POST /v1/reason     experimental Zoro-1 "reasoned action": the weights write their reasoning (<think>), which is
+                      added to the state, then the released head re-scores the options. Follows zoro_decide.py except
+                      for two added sentences (brevity, Korean); reasoning cut off by the token budget is flagged and
+                      not used for re-scoring. Probabilities everywhere are an uncalibrated softmax (T = 1).
   GET  /v1/models     console-compatible model list: "sentinel-zoro" (sft) and "zoro-base"
   POST /v1/systemone  console-compatible typed choices. dispatch/urgency with the console's Korean labels
                       run the trained question text and keys (sft adds hierarchy answers); any other choice
@@ -137,7 +139,8 @@ def render_state(turns):
 
 # Zoro-1 reasoned action (model card "Reasoned action", zoro_decide.py / decide_request.py at the pinned revision):
 # one user message = state + question + options + this instruction, thinking on, sampled at 0.6 / 0.95 / 20, stop at
-# </think>. The short Korean sentence is our addition; the thinking itself mostly stays in English.
+# </think>. Both trailing sentences (brevity, Korean) are our additions, so results are not comparable with the
+# model card's reasoned-action numbers; the thinking itself mostly stays in English.
 REASONING_INSTRUCTION = ("Think it through step by step: work out anything that needs calculating or checking, then "
                          "say which option you choose for each question. Keep it brief: at most five short sentences. "
                          "한국어로 간결하게 쓰세요.")
@@ -147,7 +150,7 @@ END_THINK = "</think>"
 class ReasonRequest(BaseModel):
     turns: list[Turn] = Field(min_length=1)
     question: ChoiceQuestion
-    max_new_tokens: int = Field(default=512, ge=32, le=2048)
+    max_new_tokens: int = Field(default=1024, ge=32, le=4096)
 
 
 class Reasoner:
@@ -157,6 +160,7 @@ class Reasoner:
         self.model_dir, self.device = model_dir, device
         self.lm = self.tokenizer = None
         self.lock = threading.Lock()
+        self._load()  # a second copy of the weights (~9 GB): fail at startup, not in the middle of a demo
 
     def _load(self):
         if self.lm is None:
@@ -182,8 +186,10 @@ class Reasoner:
                 torch.cuda.synchronize()
             elapsed = (time.perf_counter() - start) * 1000
         new = out[0, ids["input_ids"].shape[1]:]
-        finished = bool(len(new)) and int(new[-1]) in self.stops
+        # Only </think> completes a reasoning under the protocol; <|im_end|> or the budget does not.
+        finished = bool(len(new)) and int(new[-1]) == self.stops[0]
         reasoning = self.tokenizer.decode(new, skip_special_tokens=True).replace(END_THINK, "").strip()
+        reasoning = reasoning.removeprefix("<think>").strip()
         return reasoning, elapsed, int(len(new)), finished
 
 
@@ -326,6 +332,8 @@ def console_turns(state):
 
 
 def systemone(decider, request):
+    if request.reasoning:
+        raise HTTPException(501, "reasoning=true is not served on /v1/systemone; use /v1/reason")
     variant = CONSOLE_MODELS.get(request.model)
     if variant is None or variant not in decider.heads:
         raise HTTPException(404, f"Unknown model {request.model}; available: {sorted(CONSOLE_MODELS)}")
@@ -420,16 +428,23 @@ def create_app(decider, generator=None, reasoner=None):
             raise HTTPException(503, "Reasoning is not enabled; start the server with --reasoning")
         question = {"instructions": request.question.instructions, "criteria": request.question.criteria}
         state = render_state(request.turns)
-        reasoning, ms, tokens, finished = reasoner.think(state, question, request.max_new_tokens)
+        # Score directly first: an invalid or overlong request fails here, before any generation is spent.
         direct, direct_ms = decider._scores({"state": state, "questions": {"choice": {"type": "choice", **question}}}, "base")
-        # decide_request.with_reasoning on a plain-string state, rendered as decide_request.render does.
-        reasoned_state = f"situation: {state}\nreasoning: {reasoning}"
-        results, decide_ms = decider._scores({"state": reasoned_state,
-                                              "questions": {"choice": {"type": "choice", **question}}}, "base")
+        reasoning, ms, tokens, finished = reasoner.think(state, question, request.max_new_tokens)
+        reasoned, decide_ms = None, 0.0
+        if finished:  # a reasoning cut off by the budget is not added to the state (model card: worse than none)
+            # decide_request.with_reasoning on a plain-string state, rendered as decide_request.render does.
+            reasoned_state = f"situation: {state}\nreasoning: {reasoning}"
+            try:
+                results, decide_ms = decider._scores({"state": reasoned_state,
+                                                      "questions": {"choice": {"type": "choice", **question}}}, "base")
+                reasoned = results["choice"]["probabilities"]
+            except HTTPException as exc:
+                if exc.status_code != 413:
+                    raise
         return {"model": decider.describe("base"), "reasoning": reasoning, "reasoning_tokens": tokens,
-                "reasoning_finished": finished, "reasoning_ms": ms,
-                "direct": direct["choice"]["probabilities"], "reasoned": results["choice"]["probabilities"],
-                "decide_ms": direct_ms + decide_ms}
+                "reasoning_finished": finished, "reasoning_ms": ms, "direct": direct["choice"]["probabilities"],
+                "reasoned": reasoned, "decide_ms": direct_ms + decide_ms}
 
     @app.post("/v1/choose")
     def choose(request: ChooseRequest):
