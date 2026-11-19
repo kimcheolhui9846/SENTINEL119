@@ -191,7 +191,7 @@ function DispatchMap({ fleet, area, orders, patrols, positions }: {
       <ul className="dispatch-legend" aria-label="범례">
         {(['ambulance', 'pump', 'rescue'] as const).map((k) => <li key={k} data-kind={k}>{UNIT_LABEL[k]}</li>)}
         <li data-kind="caller">신고 위치(법정동)</li>
-        {patrols.length ? <li className="legend-note">주변 차량 순찰은 시연용 연출</li> : null}
+        {patrols.length ? <li className="legend-note">차량 순찰은 시연용 연출 · 서울 {patrols.length}대</li> : null}
       </ul>
     </div>
   );
@@ -226,7 +226,10 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
   const ordersRef = useRef(orders);
   ordersRef.current = orders;
 
-  useEffect(() => { dispatchApi.fleet().then((f) => setFleet(f.units)).catch(() => setError('소방관서 자료를 불러오지 못했습니다.')); }, []);
+  useEffect(() => {
+    dispatchApi.fleet().then((f) => setFleet(f.units)).catch(() => setError('소방관서 자료를 불러오지 못했습니다.'));
+    dispatchApi.patrols().then((p) => setPatrols(p.patrols)).catch(() => setPatrols([]));
+  }, []);
   useEffect(() => { const id = window.setInterval(() => setNow(performance.now()), 500); return () => window.clearInterval(id); }, []);
 
   const reset = useCallback(() => {
@@ -237,11 +240,7 @@ export default function DispatchView({ calls }: { calls: CompareScenario[] }) {
   useEffect(() => {
     if (!callId) return;
     reset();
-    setPatrols([]);
-    api.scenario(callId).then((detail) => {
-      setCall(detail);
-      if (detail.area) dispatchApi.patrols(detail.area.center).then((p) => setPatrols(p.patrols)).catch(() => setPatrols([]));
-    }).catch(() => setError('통화를 불러오지 못했습니다.'));
+    api.scenario(callId).then(setCall).catch(() => setError('통화를 불러오지 못했습니다.'));
   }, [callId, reset]);
 
   // Dispatch when the type commits; subtype / urgency / symptom commits may add units (e.g. 심정지 → 펌뷸런스).

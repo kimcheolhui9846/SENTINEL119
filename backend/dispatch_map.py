@@ -17,7 +17,7 @@ import zlib
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .routing import provider, route
@@ -77,13 +77,31 @@ def stations():
     return data["stations"], data["attribution"]
 
 
+# A thinned demo fleet: one ambulance per district, a pump engine in every other district, and a rescue
+# unit at eight 소방서 spread across the city. Stations are real; the allocation is a demo choice.
+_PUMP_EVERY, _RESCUE_UNITS = 2, 8
+
+
+@lru_cache(maxsize=1)
 def fleet():
+    rows = sorted(stations()[0], key=lambda s: (s["district"], s["kind"] != "center", s["name"]))
+    by_district = {}
+    for s in rows:
+        by_district.setdefault(s["district"], []).append(s)
     units = []
-    for s in stations()[0]:
-        kinds = ("ambulance", "pump") if s["kind"] == "center" else ("rescue", "pump")
-        for kind in kinds:
-            units.append({"id": f"{s['id']}-{kind}", "name": f"{s['name']} {UNIT_NAMES[kind]}", "kind": kind,
-                          "station": s["name"], "district": s["district"], "lat": s["lat"], "lon": s["lon"]})
+
+    def add(station, kind):
+        units.append({"id": f"{station['id']}-{kind}", "name": f"{station['name']} {UNIT_NAMES[kind]}", "kind": kind,
+                      "station": station["name"], "district": station["district"],
+                      "lat": station["lat"], "lon": station["lon"]})
+    for i, (district, group) in enumerate(sorted(by_district.items())):
+        add(group[0], "ambulance")
+        if i % _PUMP_EVERY == 0:
+            add(group[1] if len(group) > 1 else group[0], "pump")
+    halls = sorted((s for s in rows if s["kind"] == "station"), key=lambda s: (s["lat"], s["lon"]))
+    step = max(1, len(halls) // _RESCUE_UNITS)
+    for station in halls[::step][:_RESCUE_UNITS]:
+        add(station, "rescue")
     return units
 
 
@@ -132,23 +150,34 @@ def _waypoint(unit, km, index):
             "lon": unit["lon"] + km * math.sin(bearing) / (111.0 * math.cos(math.radians(unit["lat"])))}
 
 
-async def patrols(center, radius_km=5.0, limit=14):
-    """Road loops station -> waypoint -> station for units near ``center`` (demo effect, not real patrols)."""
-    near = sorted((u for u in fleet() if _km(u, center) <= radius_km), key=lambda u: _km(u, center))[:limit]
+PATROLS_PATH = STATIONS_PATH.with_name("seoul-patrols.json")
+
+
+async def patrols(units=None):
+    """Road loops station -> waypoint -> station for every fleet unit (demo effect, not real patrols)."""
     async def loop(unit):
         point = _waypoint(unit, 1.2, len(unit["id"]))
         out, back = await asyncio.gather(route(unit, point), route(point, unit))
         return {"id": unit["id"], "path": out["path"] + back["path"][1:],
                 "duration_s": out["duration_s"] + back["duration_s"], "source": out["source"]}
-    return await asyncio.gather(*(loop(u) for u in near))
+    return await asyncio.gather(*(loop(u) for u in (units or fleet())))
+
+
+@lru_cache(maxsize=1)
+def stored_patrols():
+    """Precomputed loops (tools: python -m backend.dispatch_map); loops for unknown units are dropped."""
+    if not PATROLS_PATH.is_file():
+        return []
+    ids = {u["id"] for u in fleet()}
+    return [p for p in json.loads(PATROLS_PATH.read_text(encoding="utf-8"))["patrols"] if p["id"] in ids]
 
 
 router = APIRouter(prefix="/api/map")
 
 
 @router.get("/patrols")
-async def get_patrols(lat: Annotated[float, Query(ge=37.0, le=38.0)], lon: Annotated[float, Query(ge=126.5, le=127.5)]):
-    return {"patrols": await patrols({"lat": lat, "lon": lon}), "note": "시연용 순찰 경로 (실제 차량 위치 아님)"}
+async def get_patrols():
+    return {"patrols": stored_patrols(), "note": "시연용 순찰 경로 (실제 차량 위치 아님)"}
 
 
 @router.get("/fleet")
@@ -167,3 +196,12 @@ async def dispatch(body: DispatchRequest):
             "assignments": await assign(incident, steps[body.skip:], body.busy,
                                         {k: {"lat": v["lat"], "lon": v["lon"]} for k, v in body.positions.items()
                                          if {"lat", "lon"} <= v.keys()})}
+
+
+if __name__ == "__main__":  # precompute the patrol loops once (OSRM/TMAP road routes)
+    import sys
+    loops = asyncio.run(patrols())
+    PATROLS_PATH.write_text(json.dumps({"note": "시연용 순찰 경로. 도로 경로: " + ", ".join(sorted({p["source"] for p in loops}))
+                                        + " (OpenStreetMap ODbL / TMAP)", "patrols": loops},
+                                       ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print(len(loops), "loops", sum(len(p["path"]) for p in loops), "points", file=sys.stderr)

@@ -28,5 +28,5 @@ export const dispatchApi = {
   fleet: () => call<{ units: FleetUnit[]; attribution: string }>('/fleet'),
   dispatch: (body: { lat: number; lon: number; dispatch: string; subtype?: string | null; symptom?: string | null;
     urgency?: string | null; busy: string[]; skip: number; positions?: Record<string, Point> }) => call<DispatchResponse>('/dispatch', body),
-  patrols: (center: Point) => call<{ patrols: Patrol[]; note: string }>(`/patrols?lat=${center.lat}&lon=${center.lon}`),
+  patrols: () => call<{ patrols: Patrol[]; note: string }>('/patrols'),
 };
