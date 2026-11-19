@@ -32,27 +32,68 @@ SENTINEL119는 이 정보들을 신고 접수 단계부터 연결하는 데 집�
 - **지침 근거:** 소방청 「119구급대원 현장응급처치 표준지침(2023년 개정본)」의 필요한 항목을 원문과 대조해 활용.
 - **병원 정보:** [국립중앙의료원 응급의료기관 정보 조회 API](https://www.data.go.kr/data/15000563/openapi.do) 연동을 통해 병원 후보의 수용 정보를 비교.
 
-## 로컬 관제 화면 실행
+## 평가 결과
 
-서울 합성 신고 3종을 재생하는 FastAPI·React 데모입니다. 기본 모드는 시뮬레이션입니다. 다음 명령을 저장소 루트에서 PowerShell로 실행한 뒤 브라우저에서 [로컬 관제 화면](http://127.0.0.1:8000/)을 엽니다. 검증 환경은 Python 3.13과 Node.js 26입니다.
+최종 모델은 계층형 결정 체크포인트 **H4**입니다(Zoro-1 + LoRA, 출동유형 → 구급·구조 세부유형 → 긴급도 + 구급 주증상). AI Hub 공식 Validation에서 나눈 dev 300 · confirm 1,000 · test 1,000통화 중 test는 모델을 고른 뒤 한 번만 평가했습니다.
+
+**test 1,000통화** (통화 전체를 본 판단)
+
+| 모델 | 출동유형 F1 | 긴급도 F1 | 긴급도 하향 오판 | 구급 세부유형 | 구조 세부유형 | 주증상 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Zoro-1 base | 0.588 | 0.318 | 8.0% | 27.4% | 9.4% | 37.4% |
+| **SENTINEL_ZORO (H4)** | **0.720** | **0.544** | 23.3% | **59.9%** | **50.0%** | **45.2%** |
+
+세부유형은 출동유형까지 맞힌 경우만 정답으로 셉니다. base의 낮은 하향 오판은 대부분을 긴급도 상으로 답하는 편향 때문입니다.
+
+**턴 단위 확정** (dev 83통화의 모든 턴 앞부분, 같은 임계값을 두 모델에 적용)
+
+| 태스크 | SENTINEL_ZORO 정밀도 (확정률) | base 정밀도 (확정률) |
+| --- | ---: | ---: |
+| 출동유형 | 98.6% (87%) | 72.3% (100%) |
+| 구급 세부유형 | 80.0% (49%) | 17.9% (75%) |
+| 긴급도 | 88.9% (22%) | 33.3% (72%) |
+| 주증상 | 76.5% (28%) | 40.0% (96%) |
+
+임계값은 맞는 확정 +1, 틀린 확정 −2, 미확정 0의 합이 최대가 되도록 dev에서 골랐습니다. 한 실행·한 seed의 결과이며 학습 설정과 confirm 비교는 [학습 안내](docs/training.md) 10절에 있습니다. 이송 지연 감소 효과는 측정하지 않았습니다.
+
+## 데모
+
+| 탭 | 동작 |
+| --- | --- |
+| 출동 관제 | 신고 통화를 한 턴씩 재생합니다. SENTINEL_ZORO가 출동유형을 확정하면 지식베이스 편성 규칙으로 구급차·펌프차·구조대를 배차하고, 차량이 실제 도로 경로(TMAP)를 따라 이동합니다. 구급이면 국립중앙의료원 실시간 병상·수술·장비·메시지와 주증상별 이송 원칙으로 병원 후보를 만들고 Zoro가 이송 병원을 고릅니다. |
+| 모델 비교 | 같은 통화를 Qwen3.5-4B(JSON 생성), SENTINEL_ZORO, Zoro-1 base에 동시에 넣고 턴별 판단·확정 시점·응답 시간을 비교합니다. |
+| 직접 입력 | 서울 지도에서 신고 위치를 찍고 가상의 수보요원과 대화하면 출동 관제와 같은 흐름으로 동작합니다. |
+
+차량은 서울 소방서 위치(OpenStreetMap)에 배치한 시연용 가상 차량이며, 출동·이송은 실제로 요청하지 않는 시뮬레이션입니다. 이전 관제 콘솔은 `/#console`, 자동 모의훈련은 `/#drill`로 열 수 있습니다.
+
+### 실행
+
+GPU 서버에서 [판단 서버](docs/training.md#11-판단-서버와-데모-연동)를 띄우고(`python tools/decision_server.py --checkpoint runs/zoro-hier-h4 --llm Qwen/Qwen3.5-4B --port 8119`) 데모 PC에서 SSH 터널로 `127.0.0.1:8119`에 연결한 뒤, 저장소 루트에서 실행합니다. 검증 환경은 Python 3.13, Node.js 26입니다.
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 npm.cmd ci --prefix frontend
 npm.cmd run build --prefix frontend
-.\.venv\Scripts\python.exe -m uvicorn backend.api:app --host 127.0.0.1 --port 8000
+$env:SENTINEL_ZORO_URL = "http://127.0.0.1:8119"
+.\.venv\Scripts\python.exe -m uvicorn backend.drill_console:create_console --factory --host 127.0.0.1 --port 8020
 ```
 
-**다음 발화**로 신고를 진행합니다. 성수역 시나리오의 2턴에서 차량 확정과 병원 보류가 함께 나타납니다. 강변 시나리오는 ETA 역전, 병원 정보 지연 시나리오는 조회 실패와 재시도를 보여줍니다. 직접 입력은 검토된 근거가 생길 때까지 보류됩니다. 초기화하면 새 신고가 시작됩니다.
+도로 경로와 병원 정보는 저장소 루트의 `.env.local`(Git 제외)에 `TMAP_APP_KEY`, `NMC_SERVICE_KEY`를 넣으면 사용합니다. TMAP 호출이 실패하면 경로는 OSRM, 그다음 직선으로 내려갑니다. 병원 실시간 정보 조회가 실패한 지역은 응급의료기관 목록 정보로 대신하고, 키가 없거나 조회 전체가 실패하면 병원 추천을 보류합니다. 화면과 로그에 각 정보의 출처를 표시합니다. 재생할 통화 파일(`{id, title, address, turns}`)은 `SENTINEL_SCENARIO_DIRS`로 지정합니다. AI Hub 실제 통화는 로컬 시연에만 쓰고 저장소에 넣지 않습니다.
 
-실시간 모드는 백엔드 실행 전에 `ZORO_BASE_URL`을 지정합니다. 서버가 여러 모델을 제공하면 `ZORO_MODEL_ID`도 지정합니다. 역할별 서버는 `ZORO_INTAKE_BASE_URL`, `ZORO_VEHICLE_BASE_URL`, `ZORO_HOSPITAL_BASE_URL`과 각각의 `_MODEL_ID`로 설정합니다. 서버가 응답해야 [모델 어댑터](backend/inference.py)가 모델 ID를 확인하고 typed decision을 요청합니다. 차량·병원 자료는 두 모드 모두 가상입니다.
+백엔드 테스트는 `.\.venv\Scripts\python.exe -B -m unittest discover -v`, 프론트 타입 검사는 `npx tsc --noEmit -p frontend`로 실행합니다. 학습 코드 테스트는 `pip install -e ".[train]"` 환경에서 `pytest`로 실행합니다. 데모 전용 환경의 `unittest discover`에서는 이 테스트 모듈들이 import 오류로 표시됩니다.
 
-모의 출동 클라이언트는 화면에 표시한 세션의 `expected_version`, 차량의 `expected_vehicle_id`, `decisions.vehicle.recommendation_revision`에서 읽은 `expected_vehicle_revision`을 `dispatch` 이벤트에 함께 보냅니다. 추천이 바뀌어 HTTP 409를 받으면 최신 세션을 표시하고 운영자의 새 클릭을 기다립니다. 모델 응답에 `model`이 있으면 요청한 ID와 일치해야 합니다. 이 필드를 생략하는 기존 서버에서는 요청에 선택한 ID만 확인할 수 있습니다.
+## 에이전트 실행 로그
 
-백엔드 단위·HTTP 테스트는 `.\.venv\Scripts\python.exe -B -m unittest discover -v`로 실행합니다. 프론트 개발 서버는 `npm.cmd run dev --prefix frontend`로 시작하며 `/api`를 로컬 FastAPI에 전달합니다. 서버가 켜진 상태에서 Playwright MCP로 [데스크톱 관제 흐름](frontend/tests/console.browser.js)과 [차량 재확인·병원 정보 복구](frontend/tests/review.browser.js)를 검증할 수 있습니다.
+[`tools/scenario_log.py`](tools/scenario_log.py)가 데모 백엔드를 그대로 호출해 시나리오 하나를 처음부터 끝까지 실행하고, 턴별 Zoro 입력·확률·WAIT/COMMIT, 배차·병원 도구 호출, 오류와 복구를 JSONL로 남깁니다. 입력은 공유용으로 작성한 합성 통화이며 모델·도로·병원 정보는 실제 호출입니다.
 
-차량 만료와 병원 조회 연속 실패를 재현하려면 프론트 빌드 후 `.\.venv\Scripts\python.exe -m uvicorn tests.freshness_console:create_test_app --factory --host 127.0.0.1 --port 8024`로 테스트 서버를 실행합니다. [데스크톱 장애 회귀 검사](frontend/tests/freshness.browser.js)는 출동 거절 직후의 버튼 상태와 병원의 마지막 관측 시각을 확인합니다.
+| 로그 | 시나리오 | 결과 |
+| --- | --- | --- |
+| [scenario-01](docs/submission/logs/scenario-01.jsonl) | 성북구 장위동 심정지 의심 | 2턴 구급 확정 → 구급차 배차·병원 추천, 6턴 심정지·긴급도 상·주증상 확정 → 펌뷸런스 추가 배차 |
+| [scenario-02](docs/submission/logs/scenario-02.jsonl) | 영등포구 당산동3가 빌라 화재 | 2턴 화재·긴급도 상 확정 → 펌프차 2대 + 구급차 배차 |
+| [scenario-03](docs/submission/logs/scenario-03.jsonl) | 강남구 삼성동 흉통 + 장애 주입 | 병원 API timeout(주입) → 병원 보류 후 다음 턴 재조회 성공, 4턴 판단 서버 연결 실패(주입) → 이전 확정 유지 후 다음 턴 복구, 8턴 긴급도 상 확정. 주증상(흉통)은 1순위였지만 임계값 미만으로 끝까지 대기 |
+
+기록 규약과 재실행 방법은 [실행 로그 안내](docs/submission/logs/README.md)에 있습니다.
 
 ## 공용 판단 하네스
 
@@ -85,14 +126,8 @@ def refresh(turn_id, supports, location, vehicles, hospitals):
 
 ## 현재 상태와 개발 범위
 
-현재 **119 데이터 준비와 Zoro-1 지도학습 코드**를 구현했습니다. head-only 지도 적응, LoRA+decision head 학습, 독립 평가와 관련 단위검사를 제공합니다. 관제 UI는 위 로컬 관제 화면으로 제공합니다. 외부 API 연결, 조기 판단과 실제 이송 지연 감소 효과는 아직 검증하지 않았습니다. 설치·실행 방법과 검증 절차는 [학습 안내](docs/training.md)를 참고하세요.
-
-첫 구현은 서울의 구급 시나리오와 가상 차량 환경을 대상으로 하는 텍스트 턴 재생 데모입니다. 4종 출동유형 분류를 유지하면서 구급 자원·병원 후보 추천에 집중하고, 이후 음성 입력으로 확장할 계획입니다. 데모는 관제 의사결정을 지원하는 시뮬레이션이며 실제 출동·병원 수용 확정을 수행하지 않습니다.
+119 데이터 준비, Zoro-1 지도학습·계층형 결정 학습, 독립 평가, 판단 서버, 세 탭 데모와 제출용 실행 로그를 구현했습니다. 실제 관제 환경 연동과 이송 지연 감소 효과는 검증하지 않았습니다. 데모는 관제 의사결정을 돕는 시뮬레이션이며 실제 출동·병원 수용 확정을 수행하지 않습니다. 설치·학습·평가 절차는 [학습 안내](docs/training.md)를 참고하세요.
 
 ## 문서
 
-데모 첫 화면은 출동 관제(실제 통화 재생, 지도 배차·병원 이송), 모델 비교(Qwen·SENTINEL_ZORO·base), 직접 입력(지도에서 위치 지정 후 대화) 세 탭입니다. 이전 관제 콘솔은 `/#console`, 자동 모의훈련은 `/#drill` 주소로 열 수 있습니다.
-
-서울 지도에서 신고자 핀을 누르며 구급·화재 출동을 재현하는 방법은 [자동 모의훈련 실행 안내](docs/handoffs/seoul-drill.md)에 있습니다.
-
-상세 설계와 개발 문서는 [문서 안내](docs/README.md)에서 확인할 수 있습니다.
+서울 지도에서 신고자 핀을 누르며 구급·화재 출동을 재현하는 방법은 [자동 모의훈련 실행 안내](docs/handoffs/seoul-drill.md)에 있습니다. 상세 설계와 개발 문서는 [문서 안내](docs/README.md)에서 확인할 수 있습니다.

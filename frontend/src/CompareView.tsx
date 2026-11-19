@@ -2,19 +2,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "./compareApi";
 import type { CompareScenario as ScenarioSummary, LlmResponse, ScenarioDetail, StreamResponse } from "./compareApi";
 
-// Commit thresholds chosen on dev turn prefixes (63 calls, E1) by the spec reward: +1 correct, -4 wrong, 0 never.
-// The same thresholds apply to both decision models.
-// The SFT head is under-confident on fire (minority class): its fire probability tops out near 0.8 on clear
-// fire calls. Provisional per-type dispatch threshold until the final checkpoint is re-calibrated on dev.
-export const DISPATCH_THRESHOLD: Record<string, number> = { fire: 0.75 };
-export const THRESHOLD = { dispatch: 0.9, subtype: 0.85, urgency: 0.85, symptom: 0.8 } as const;
+// Commit thresholds for the final checkpoint H4 (zoro-hier-h4, step 440), tuned on dev turn prefixes (83 calls)
+// by reward +1 correct / -2 wrong / 0 never, dispatch per type (the SFT head is less confident on fire).
+// The same thresholds apply to both decision models. The stricter -4 penalty gave 100 % precision but
+// committed subtype / urgency / symptom on only 3-17 % of calls.
+export const DISPATCH_THRESHOLD: Record<string, number> = { ems: 0.66, rescue: 0.86, fire: 0.79, other: 0.82 };
+export const SUBTYPE_THRESHOLD: Record<string, number> = { ems_subtype: 0.86, rescue_subtype: 0.68 };
+export const THRESHOLD = { dispatch: 0.82, subtype: 0.86, urgency: 0.82, symptom: 0.69 } as const;
 // Measured on those dev prefixes at these thresholds: precision of commits (commit rate).
 const DEV_PRECISION = {
-  calls: 63,
+  calls: 83,
   rows: [
-    { task: "출동유형", sft: [0.947, 0.905], base: [0.797, 0.937] },
-    { task: "세부유형", sft: [0.8, 0.357], base: [0.167, 0.536] },
-    { task: "긴급도", sft: [1.0, 0.016], base: [0.333, 0.571] },
+    { task: "출동유형", sft: [0.986, 0.867], base: [0.723, 1.0] },
+    { task: "구급 세부유형", sft: [0.8, 0.492], base: [0.179, 0.75] },
+    { task: "긴급도", sft: [0.889, 0.217], base: [0.333, 0.723] },
+    { task: "주증상", sft: [0.765, 0.279], base: [0.4, 0.962] },
   ],
 };
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -60,7 +62,7 @@ export function advance(state: ZoroState, probs: ZoroState["probs"], turn: numbe
   tryCommit("dispatch", "dispatch", THRESHOLD.dispatch, "출동유형");
   if (commits.dispatch) {  // the hierarchy opens only after the dispatch type is fixed
     const subQ = SUBTYPE_OF[commits.dispatch.key];
-    if (subQ) tryCommit("subtype", subQ, THRESHOLD.subtype, "세부유형");
+    if (subQ) tryCommit("subtype", subQ, SUBTYPE_THRESHOLD[subQ] ?? THRESHOLD.subtype, "세부유형");
     tryCommit("urgency", "urgency", THRESHOLD.urgency, "긴급도");
     if (subQ === "ems_subtype" && probs?.ems_symptom) tryCommit("symptom", "ems_symptom", THRESHOLD.symptom, "주증상");
   }
@@ -104,6 +106,21 @@ function Chips({ dist, labels, commit, threshold, locked, picked }: {
   );
 }
 
+// 16 symptom options do not fit one screen: folded by default, the summary shows the commit or the leader.
+function SymptomFold({ dist, labels, commit }: { dist: Record<string, number>; labels: Record<string, string>; commit?: Commit }) {
+  const best = top(dist);
+  return (
+    <details className="sym-fold">
+      <summary>
+        {commit ? <strong className="sym-commit">✓ {commit.label} · {commit.turn}턴 확정</strong>
+          : best ? <span className="tabular">1순위 {labels[best[0]] ?? best[0]} {Math.round(best[1] * 100)}% · 확정 {Math.round(THRESHOLD.symptom * 100)}%↑</span>
+          : null}
+      </summary>
+      <Chips dist={dist} labels={labels} commit={commit} threshold={THRESHOLD.symptom} />
+    </details>
+  );
+}
+
 function Latency({ last, list, busy }: { last?: number; list: number[]; busy: boolean }) {
   return (
     <div className="latency">
@@ -133,18 +150,20 @@ export function ZoroPanel({ id, name, note, model, labels, busy }: {
         </div>
         <div className="drow"><span className="dlabel">세부유형</span>
           {!d ? <span className="pending">출동유형 확정 후 열림</span>
-            : subQ && labels ? <Chips dist={probs?.[subQ]} labels={labels[subQ]} commit={model.commits.subtype} threshold={THRESHOLD.subtype} />
+            : subQ && labels ? <Chips dist={probs?.[subQ]} labels={labels[subQ]} commit={model.commits.subtype} threshold={SUBTYPE_THRESHOLD[subQ] ?? THRESHOLD.subtype} />
             : <span className="pending">{d.label}: 대분류에서 판단 종료</span>}
         </div>
         <div className="drow"><span className="dlabel">긴급도</span>
           {labels ? <Chips dist={probs?.urgency} labels={labels.urgency} commit={model.commits.urgency}
                            threshold={THRESHOLD.urgency} locked={!d} /> : null}
         </div>
-        {subQ === "ems_subtype" && probs?.ems_symptom && labels?.ems_symptom ? (
-          <div className="drow"><span className="dlabel">주증상</span>
-            <Chips dist={probs.ems_symptom} labels={labels.ems_symptom} commit={model.commits.symptom} threshold={THRESHOLD.symptom} />
-          </div>
-        ) : null}
+        <div className="drow"><span className="dlabel">주증상</span>
+          {!d ? <span className="pending">출동유형 확정 후 열림</span>
+            : subQ !== "ems_subtype" ? <span className="pending">{d.label}: 구급 출동에서만 판단</span>
+            : probs?.ems_symptom && labels?.ems_symptom
+              ? <SymptomFold dist={probs.ems_symptom} labels={labels.ems_symptom} commit={model.commits.symptom} />
+              : <span className="pending">이 체크포인트는 주증상을 학습하지 않음</span>}
+        </div>
       </div>
       <Latency last={model.latencies[model.latencies.length - 1]} list={model.latencies} busy={busy} />
     </section>
@@ -172,6 +191,9 @@ export function LlmPanel({ state, labels }: { state: LlmState; labels: Labels | 
         </div>
         <div className="drow"><span className="dlabel">긴급도</span>
           {labels ? <Chips labels={labels.urgency} picked={a ? a.urgency : undefined} /> : null}
+        </div>
+        <div className="drow"><span className="dlabel">주증상</span>
+          <span className="pending">생성 항목 아님 (출동유형·세부유형·긴급도만 생성)</span>
         </div>
         {state.raw ? <p className="llm-raw tabular" title="생성된 원문">{state.raw}</p> : null}
       </div>
@@ -352,10 +374,10 @@ export default function CompareView({ scenarios }: { scenarios: ScenarioSummary[
                 ))}
               </tbody>
             </table>
-            <p className="muted">긴급도는 라벨 자체가 모호해 SENTINEL_ZORO가 대부분 WAIT로 남습니다. base는 확정하지만 3건 중 2건이 틀립니다.</p>
+            <p className="muted">같은 임계값에서 base는 거의 모든 통화에서 확정하지만 틀린 확정이 많습니다. SENTINEL_ZORO는 확신할 때만 확정합니다.</p>
           </section>
           <p className="muted stream-foot">
-            Zoro 칩의 밝기는 모델 확률이고, 확정 기준은 dev에서 정한 임계값(출동유형 {THRESHOLD.dispatch * 100}%, 세부유형·긴급도 {THRESHOLD.urgency * 100}%)입니다.
+            Zoro 칩의 밝기는 모델 확률이고, 확정 기준은 최종 모델 H4로 dev 83통화에서 정한 임계값입니다(출동유형 구급 66%·구조 86%·화재 79%·기타 82%, 구급 세부유형 86%·구조 세부유형 68%, 긴급도 82%, 주증상 69%).
             세부유형·긴급도는 출동유형 확정 후에만 확정합니다. Qwen은 같은 대화를 보고 JSON을 생성하며, 매 턴의 답을 그대로 표시합니다.
             응답 시간은 GPU 서버의 모델 계산 시간입니다.
           </p>
