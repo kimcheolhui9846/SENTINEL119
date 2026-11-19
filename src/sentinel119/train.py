@@ -427,6 +427,15 @@ def main():
         parser.error("--checkpoint is for evaluation; use --init-checkpoint to continue training")
     if args.init_checkpoint and (args.evaluate_only or args.checkpoint):
         parser.error("--init-checkpoint is for training runs only")
+    if (args.select_by == "composite" and args.questions
+            and not set(PRIMARY) <= {q.strip() for q in args.questions.split(",")}):
+        parser.error("--select-by composite needs both dispatch and urgency in --questions")
+    if args.init_checkpoint:
+        init_config = json.loads((args.init_checkpoint / "run.json").read_text(encoding="utf-8")).get("config", {})
+        for name in ("lora_rank", "lora_alpha", "lora_targets"):
+            if getattr(args, name) != parser.get_default(name) and getattr(args, name) != init_config.get(name):
+                parser.error(f"--{name.replace('_', '-')} differs from --init-checkpoint; the loaded adapter keeps its own")
+            setattr(args, name, init_config.get(name, getattr(args, name)))
     if args.reference_data and (not args.checkpoint or args.evaluate_only not in ("confirm", "test")):
         parser.error("--reference-data requires a checkpoint and a reserved confirm/test evaluation")
     if args.output.exists() and any(args.output.iterdir()):
@@ -482,6 +491,12 @@ def main():
                 raise ValueError("--init-checkpoint must be a completed run of the same --mode")
             if not same_base(init["model"], identity):
                 raise ValueError("--init-checkpoint uses a different base model identity")
+            if init.get("prompt") != prompt:
+                raise ValueError("--init-checkpoint was trained with another prompt; pass the same --prompt-variant")
+            if checkpoint_questions(None, init) != keep:
+                raise ValueError("--init-checkpoint was trained on another question set; pass the same --questions")
+            if args.mode == "lora" and not (args.init_checkpoint / "adapter").is_dir():
+                raise ValueError("--init-checkpoint has no LoRA adapter to continue")
             files = [args.init_checkpoint / "decision_head.pt"] + (
                 [args.init_checkpoint / "adapter" / "adapter_model.safetensors"] if args.mode == "lora" else [])
             metadata["init_checkpoint"] = {"path": str(args.init_checkpoint), "best_step": init["result"].get("best_step"),

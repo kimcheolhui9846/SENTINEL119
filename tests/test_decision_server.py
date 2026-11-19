@@ -89,6 +89,28 @@ class DecisionServerTests(unittest.TestCase):
         body = {"model": "other", "state": "x", "questions": {"q": {"type": "choice", "criteria": {"a": "a"}}}}
         self.assertEqual(self.client.post("/v1/systemone", json=body).status_code, 404)
 
+    def test_malformed_choice_question_is_a_client_error(self):
+        body = {"model": "zoro-base", "state": "x", "questions": {"vehicle": {"type": "choice", "criteria": ["A", "B"]}}}
+        self.assertEqual(self.client.post("/v1/systemone", json=body).status_code, 422)
+
+    def test_hierarchy_questions_follow_what_the_checkpoint_learned(self):
+        class Stub:
+            def __init__(self, prior):
+                self.prior = prior
+
+            def stream_profile(self):
+                return self.server.Decider.stream_profile(self)
+
+        Stub.server = self.server
+        ask = self.server.Decider.stream_questions
+        basic = Stub({"dataset_manifest": {}, "config": {}})
+        self.assertEqual(set(ask(basic)[0]), {"dispatch", "urgency"})
+        subset = Stub({"dataset_manifest": {"hierarchy": True}, "config": {"questions": "dispatch,urgency,ems_subtype"}})
+        self.assertEqual(set(ask(subset)[0]), {"dispatch", "urgency", "ems_subtype"})
+        full = Stub({"dataset_manifest": {"hierarchy": True}, "config": {}})
+        self.assertEqual(set(ask(full)[0]), {"dispatch", "urgency", "ems_subtype", "rescue_subtype", "ems_symptom"})
+        self.assertEqual(len(ask(Stub(None))[0]), 5)
+
     def test_llm_parser_maps_labels_and_flags_invalid_values(self):
         labels = self.server.stream_labels()
         answer = self.server.parse_llm('답: {"출동유형": "구급", "세부유형": "심정지", "긴급도": "최상"}', labels)

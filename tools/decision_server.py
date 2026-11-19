@@ -33,7 +33,7 @@ from pydantic import BaseModel, Field
 import torch
 
 from sentinel119.decision import ContextOverflow, encode
-from sentinel119.model import load_head, load_zoro
+from sentinel119.model import load_head, load_zoro, same_base
 from sentinel119.prepare import QUESTIONS
 
 MAX_LENGTH = 4096
@@ -153,6 +153,8 @@ class Decider:
                                "max_length": prior["config"]["max_length"],
                                "sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in files}}
         self.model, self.tokenizer, self.identity = load_zoro(device=device, local_files_only=local_files_only, **kwargs)
+        if prior and not same_base(prior["model"], self.identity):
+            raise ValueError("Checkpoint was trained on a different base model identity")
         self.model.eval()
         self.heads = {"base": load_head(Path(self.identity["local_model_dir"]) / "decision_head.pt", device)}
         if checkpoint:
@@ -168,6 +170,8 @@ class Decider:
             rows = encode(example, self.tokenizer, self.max_length)
         except ContextOverflow as exc:
             raise HTTPException(413, str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
         backbone = self.model.backbone
         adapter_off = variant == "base" and hasattr(backbone, "disable_adapter")
         with self.lock, torch.no_grad(), (backbone.disable_adapter() if adapter_off else nullcontext()):
@@ -195,8 +199,15 @@ class Decider:
         """Turn-wise question set with hierarchy keys; returns (questions, rename for auxiliary keys)."""
         from sentinel119.hierarchy import EMS_SUBTYPES, QUESTIONS as HIERARCHY, RESCUE_SUBTYPES
         questions = {"dispatch": QUESTIONS["dispatch"], "urgency": QUESTIONS["urgency"]}
-        if self.stream_profile() != "auxiliary":
-            questions.update(HIERARCHY)
+        profile = self.stream_profile()
+        if profile != "auxiliary":
+            # Serve hierarchy answers only from a checkpoint trained on them (Base-only servers keep all).
+            trained = (self.prior or {}).get("config", {}).get("questions")
+            keep = {q.strip() for q in trained.split(",")} if trained else None
+            if self.prior is None or profile == "hierarchy":
+                questions.update({q: v for q, v in HIERARCHY.items() if keep is None or q in keep})
+            if keep is not None:
+                questions = {q: v for q, v in questions.items() if q in keep}
             return questions, {}
         # Auxiliary checkpoints learned one 16-way subtype question; ask it restricted to one parent's children.
         from sentinel119.auxiliary import AUX_QUESTIONS, SUBTYPES
@@ -281,6 +292,9 @@ def systemone(decider, request):
             if qid in probs:
                 hierarchy[qid] = {labels[qid].get(k, k): p for k, p in probs[qid].items()}
     rest = {qid: q for qid, q in request.questions.items() if qid not in trained}
+    if any(q.get("type", "choice") != "choice" or not isinstance(q.get("criteria"), dict) or not q["criteria"]
+           for q in rest.values()):
+        raise HTTPException(422, "Only nonempty choice questions are supported")
     if rest:
         state = render_state(turns) if turns else (
             request.state if isinstance(request.state, str) else json.dumps(request.state, ensure_ascii=False))
@@ -288,8 +302,6 @@ def systemone(decider, request):
                            "criteria": {k: (v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))
                                         for k, v in (q.get("criteria") or {}).items()}}
                      for qid, q in rest.items()}
-        if any(q.get("type", "choice") != "choice" or not q.get("criteria") for q in rest.values()):
-            raise HTTPException(422, "Only nonempty choice questions are supported")
         results, ms = decider._scores({"state": state, "questions": questions}, variant)
         elapsed += ms
         for qid, result in results.items():

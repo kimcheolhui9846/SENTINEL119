@@ -57,9 +57,25 @@ def labels_for(raw, dispatch_label):
 
 
 def augment(data_root, data, output, parent=None):
-    """Write ``output`` = ``data`` + subtype/triage questions; ``parent`` is an already augmented parent."""
+    """Write ``output`` = ``data`` + subtype/triage questions; ``parent`` is an already augmented parent.
+
+    Builds in a staging directory and renames it at the end, so a failed run leaves nothing at ``output``."""
+    import shutil
     if output.exists():
         raise ValueError("Use a new output directory")
+    staging = output.with_name(output.name + ".partial")
+    if staging.exists():
+        shutil.rmtree(staging)
+    try:
+        counts = _augment(data_root, data, staging, parent)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    staging.rename(output)
+    return counts
+
+
+def _augment(data_root, data, output, parent):
     manifest = json.loads((data / "manifest.json").read_text(encoding="utf-8"))
     archives = {path.name: path for path in data_root.rglob("*.zip")}
     output.mkdir(parents=True)

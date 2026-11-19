@@ -67,9 +67,13 @@ def load(data, split, scores_path):
     ids = [s["group_id"] for s in scores["scores"]]
     if len(ids) != len(set(ids)):
         raise ValueError("Scores contain duplicate calls")
-    if set(ids) != set(rows):
-        raise ValueError(f"Scores and split differ: {len(set(rows) - set(ids))} missing, {len(set(ids) - set(rows))} extra")
-    out = {"ids": ids, "identity": identity(scores)}
+    overflow = set(scores.get("coverage", {}).get("overflow_group_ids", []))
+    if overflow - set(rows):
+        raise ValueError("Recorded overflow calls are not in this split")
+    expected = set(rows) - overflow
+    if set(ids) != expected:
+        raise ValueError(f"Scores and split differ: {len(expected - set(ids))} missing, {len(set(ids) - expected)} extra")
+    out = {"ids": ids, "identity": identity(scores), "overflow_group_ids": sorted(overflow)}
     for qid, labels in (("urgency", URGENCY), ("dispatch", DISPATCH)):
         out[qid] = (log_softmax(np.array([[s["logits"][qid][k] for k in labels] for s in scores["scores"]])),
                     np.array([labels.index(rows[i][qid]) for i in ids]))
