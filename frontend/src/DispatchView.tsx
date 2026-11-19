@@ -240,21 +240,62 @@ function Countdown({ order, now }: { order: Order; now: number }) {
   return <span className="tabular">{left > 0 ? `도착까지 ${Math.floor(left / 60)}분 ${Math.round(left % 60)}초` : '현장 도착'}</span>;
 }
 
-// Free-input mode: a scripted virtual dispatcher asks for what SENTINEL_ZORO has not committed yet.
-function dispatcherReply(c: ZoroState['commits'], asked: Set<string>) {
+// Free-input mode: a scripted virtual dispatcher that follows the order of real 119 calls (AI Hub
+// Validation transcripts): what happened → address → who / how → early dispatch notice → condition
+// checks → guidance. Wording mirrors those calls; which question comes next depends on what
+// SENTINEL_ZORO has already committed, so the model is never told the answer.
+export const DISPATCHER_GREETING = '네, 119 상황실입니다.';
+function dispatcherReply(c: ZoroState['commits'], asked: Set<string>, dong: string) {
   const ask = (key: string, text: string) => (asked.has(key) ? null : (asked.add(key), text));
-  if (!c.dispatch) return ask('what', '네, 어떤 상황인지 조금 더 자세히 말씀해 주세요. 다치거나 아픈 분이 있나요?')
-    ?? ask('what2', '지금 눈앞에 보이는 상황을 그대로 말씀해 주세요.') ?? '네, 계속 말씀해 주세요.';
-  if (c.dispatch.label === '화재') return ask('fire', '불이 어디에서 나고 있나요? 안에 남아 있는 사람이 있나요? 먼저 안전한 곳으로 대피하세요.')
-    ?? '소방차가 출동했습니다. 안전한 곳에서 기다려 주세요.';
-  if (c.dispatch.label === '구조') return ask('rescue', '갇히거나 다친 분이 있나요? 정확히 어떤 상황인가요?')
-    ?? (!c.urgency ? ask('rescue-u', '그분 상태는 어떤가요? 의식이 있고 말을 하나요?') : null) ?? '구조대가 출동했습니다. 위험한 곳에 가까이 가지 마세요.';
-  if (c.dispatch.label === '기타') return ask('other', '확인했습니다. 담당 기관으로 안내해 드리겠습니다.') ?? '네, 말씀하세요.';
-  if (!c.subtype) return ask('ems-what', '구급차 보내드리겠습니다. 환자분 어디가 어떻게 불편하신가요? 언제부터 그러셨어요?')
-    ?? ask('ems-what2', '다치신 건가요, 아니면 갑자기 아프신 건가요?') ?? '네, 계속 말씀해 주세요.';
-  if (!c.urgency) return ask('ems-u', '지금 의식은 있으세요? 숨은 잘 쉬시나요?') ?? ask('ems-u2', '상태가 점점 나빠지고 있나요?') ?? '네, 상태 계속 지켜봐 주세요.';
-  if (!c.symptom) return ask('ems-s', '가장 불편한 증상이 무엇인지 하나만 말씀해 주세요.') ?? '구급차가 가고 있습니다. 전화 끊지 말고 기다려 주세요.';
-  return ask('ems-done', '구급차가 가고 있습니다. 환자 곁에서 전화 끊지 말고 기다려 주세요.') ?? '네, 구급대원이 곧 도착합니다.';
+  // 1. Address right after the first report, as dispatchers do before anything else.
+  const address = ask('address', `예, 선생님 계신 곳 주소가 어떻게 돼요? ${dong} 쪽 맞으세요?`);
+  if (address) return address;
+  if (!c.dispatch) {
+    return ask('what', '예, 어느 분이 어떻게 안 좋으세요? 아니면 무슨 일이 있으신 거예요?')
+      ?? ask('what2', '지금 눈앞에 어떤 상황인지 그대로 말씀해 주세요, 선생님.')
+      ?? ask('what3', '다치신 분이 있어요? 아니면 불이 나거나 연기가 보이세요?') ?? '예, 예. 계속 말씀하세요.';
+  }
+  // 2. Announce the dispatch on the first dispatcher turn after the type commits.
+  const kind = c.dispatch.label;
+  if (kind === '화재') {
+    return ask('fire-go', '예, 소방차 출동했습니다. 지금 무슨 색 연기가 보이세요? 총 몇 층짜리 건물이에요?')
+      ?? ask('fire-people', '안에 남아 있는 사람 있어요? 선생님은 건물 밖으로 나와 계신 거죠?')
+      ?? ask('fire-safe', '엘리베이터 타지 마시고 계단으로 내려가세요. 연기 마시지 않게 몸 낮추시고요.')
+      ?? '예, 가서 확인해볼게요. 소방관들이 가면서 전화할 거예요, 전화 받아주세요.';
+  }
+  if (kind === '구조') {
+    return ask('rescue-go', '예, 차 나갔습니다. 몇 층 몇 호예요? 지금 어떤 상황이에요?')
+      ?? (!c.urgency ? ask('rescue-who', '다치신 분 있어요? 의식은 있고 말은 하세요?') : null)
+      ?? ask('rescue-safe', '위험하니까 가까이 가지 마시고 안전한 곳에서 기다려 주세요.')
+      ?? '예, 구조대가 가면서 전화할 거예요. 전화 받아주세요.';
+  }
+  if (kind === '기타') {
+    return ask('other-check', '아, 그래요? 타는 냄새나 연기 같은 건 없는 거죠?')
+      ?? ask('other-go', '예, 알겠습니다. 저희가 한번 확인해 보도록 할게요.') ?? '예, 말씀하세요.';
+  }
+  // 구급
+  const go = ask('ems-go', '예, 구급차 출동합니다. 전화 오면 잘 받아주세요.');
+  if (go) return go;
+  if (c.subtype?.label === '심정지' || c.symptom?.label === '심정지·호흡정지') {
+    return ask('cpr', '선생님, 지금부터 제가 알려드리는 대로 가슴 압박 하셔야 돼요. 환자분 바닥에 바로 눕혀 주세요.')
+      ?? ask('cpr2', '가슴 한가운데에 두 손 겹쳐서 올리시고, 팔 쭉 펴고 세게, 빠르게 누르세요. 하나, 둘, 셋, 넷.')
+      ?? '계속 누르세요. 구급대원 도착할 때까지 멈추지 마세요.';
+  }
+  if (!c.subtype) {
+    return ask('ems-who', '환자분이 남자분이세요, 여자분이세요? 연세는 어떻게 되세요?')
+      ?? ask('ems-where', '어디가 어떻게 아프세요? 다치신 거예요, 아니면 갑자기 아프신 거예요?')
+      ?? ask('ems-when', '언제부터 그러셨어요?') ?? '예, 예.';
+  }
+  if (!c.urgency) {
+    return ask('ems-conscious', '지금 의식은 있으세요? 불렀을 때 대답은 하세요?')
+      ?? ask('ems-breath', '숨은 잘 쉬세요? 얼굴색은 괜찮으세요?') ?? ask('ems-worse', '아까보다 더 안 좋아지셨어요?') ?? '예, 예.';
+  }
+  if (!c.symptom) {
+    return ask('ems-symptom', '열이 나시거나, 토하시거나 그러지는 않으시죠? 제일 불편해하시는 게 뭐예요?')
+      ?? ask('ems-history', '평소에 앓고 계신 병이나 드시는 약 있으세요?') ?? '예, 알겠습니다.';
+  }
+  return ask('ems-wait', '예, 구급차 가고 있습니다. 환자분 곁에 계시고 전화 끊지 말고 기다려 주세요.')
+    ?? ask('ems-hospital', '병원은 현장에 도착한 구급대원하고 상의하시면 돼요.') ?? '예, 곧 도착합니다.';
 }
 
 export default function DispatchView({ calls, live = false }: { calls: CompareScenario[]; live?: boolean }) {
@@ -387,7 +428,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
       reset();
       setCall({ id: 'live', title: '직접 입력', summary: '', private: false, gold: null, turns: [], area });
       setBusy(true);
-      await judge([{ speaker: 0, text: '119입니다. 무슨 일이세요?' }]);
+      await judge([{ speaker: 0, text: DISPATCHER_GREETING }]);
       setBusy(false);
     } catch {
       setError('서울 안의 지점을 선택하세요.');
@@ -403,7 +444,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
     const afterCaller = await judge([...history, { speaker: 1, text }]);
     if (afterCaller && myRun === run.current) {
       await new Promise((r) => setTimeout(r, 500));
-      await judge([...history, { speaker: 1, text }, { speaker: 0, text: dispatcherReply(afterCaller.commits, asked.current) }]);
+      await judge([...history, { speaker: 1, text }, { speaker: 0, text: dispatcherReply(afterCaller.commits, asked.current, call.area.dong) }]);
     }
     if (myRun === run.current) setBusy(false);
   }, [live, call, busy, draft, lines, judge]);
@@ -501,7 +542,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
             : lines.some((l) => l.speaker === 1) ? `신고 위치 · ${call.area.district} ${call.area.dong} · 신고자로 대화를 이어 가세요.`
             : `신고 위치 · ${call.area.district} ${call.area.dong} (다른 곳을 클릭하면 위치 변경) · ② 아래에 신고 내용을 입력하세요.`}</span>
           <button type="button" className="button secondary" onClick={() => { reset(); setCall(null); }}>새 신고</button>
-          <span className="meta">가상 수보요원의 질문은 Zoro가 아직 확정하지 못한 항목을 묻는 정해진 문장입니다.</span>
+          <span className="meta">가상 수보요원은 실제 119 통화의 순서와 말투를 따른 정해진 문장이며, Zoro가 아직 확정하지 못한 항목을 묻습니다.</span>
         </div>
       ) : (
       <div className="dispatch-bar">
@@ -555,7 +596,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
                   {line.note ? <span className={`dt-note ${line.note === 'WAIT' ? 'is-wait' : 'is-commit'}`}>{line.note}</span> : null}
                 </li>
               ))}
-              {!lines.length ? <li className="meta">{live ? '지도에서 위치를 고르면 119 수보요원이 전화를 받습니다.'
+              {!lines.length ? <li className="meta">{live ? '지도에서 위치를 고르면 119 상황실 수보요원이 전화를 받습니다.'
                 : '재생을 누르면 통화가 한 턴씩 들어오고, 턴마다 SENTINEL_ZORO가 판단합니다.'}</li> : null}
             </ol>
             {live ? (
