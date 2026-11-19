@@ -312,6 +312,11 @@ def _summary(best, runner, effects, p, rule):
         elif top["group"] == "필요 처치 가능 여부":
             ok = [x for x in rule["prefer"] if x in best["accepts"]]
             detail = f" 선택한 병원은 {', '.join(ok)}이(가) 가능합니다." if ok else ""
+        elif top["group"] == "가용 장비" and best["equipment"]:
+            missing = [e for e in (runner or {}).get("equipment", []) if e not in best["equipment"]]
+            fewer = [e for e in best["equipment"] if runner and e not in runner["equipment"]]
+            detail = f" 선택한 병원은 {', '.join(best['equipment'])}을(를) 쓸 수 있습니다." + (
+                f" 2순위에는 {', '.join(fewer)}이(가) 없습니다." if fewer else "")
         elif top["group"] == "도착 시간":
             detail = f" 도착까지 약 {round(best['route']['duration_s'] / 60)}분입니다."
         out.append(f"가장 크게 작용한 정보는 {top['group']}입니다. 이 정보를 빼면 선택 확률이 "
