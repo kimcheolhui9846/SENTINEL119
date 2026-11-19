@@ -284,25 +284,6 @@ function Countdown({ order, now, transport }: { order: Order; now: number; trans
   return <span className="tabular is-transport">{toGo > 0 ? `병원 이송 중 · ${clock(toGo)}` : '병원 도착'}</span>;
 }
 
-// NEMC-style ER bed gauge: 원활 (5+ beds) / 보통 (1-4) / 혼잡 (0); unknown without live data.
-function BedRing({ beds }: { beds: number | null }) {
-  const state = beds === null ? null : beds >= 5 ? ['원활', 'var(--ok)'] : beds > 0 ? ['보통', 'var(--busy)'] : ['혼잡', 'var(--full)'];
-  const fill = beds === null ? 0 : Math.min(1, beds / 10);
-  const c = 2 * Math.PI * 15;
-  return (
-    <span className="bed-ring" title="응급실 가용 병상">
-      <svg viewBox="0 0 40 40" aria-hidden="true">
-        <circle cx="20" cy="20" r="15" fill="#fff" stroke="#e4e8ee" strokeWidth="5" />
-        {state ? <circle cx="20" cy="20" r="15" fill="none" stroke={state[1]} strokeWidth="5" strokeLinecap="round"
-          strokeDasharray={`${c * Math.max(0.08, fill)} ${c}`} transform="rotate(-90 20 20)" /> : null}
-        <text x="20" y="23.5" textAnchor="middle" className="ring-label" fill={state ? state[1] : '#89929f'}>{state ? state[0] : '정보'}</text>
-      </svg>
-      <span>응급실 <b>{beds ?? '-'}</b></span>
-    </span>
-  );
-}
-const LEVEL_SHORT: Record<string, string> = { 권역응급의료센터: '권역', 전문응급의료센터: '전문', 지역응급의료센터: '센터', 지역응급의료기관: '기관' };
-
 // Hospital option facts, split into readable rows (the same data Zoro read as one option sentence).
 function HospitalFacts({ h, prefer }: { h: TransferHospital; prefer: string[] }) {
   const needed = prefer.filter((x) => h.accepts.includes(x));
@@ -748,12 +729,7 @@ export default function DispatchView({ calls, live = false }: { calls: CompareSc
                       const chosen = transfer.zoro?.choice === h.hpid;
                       return (
                         <li key={h.hpid} data-chosen={chosen}>
-                          <div className="hosp-top">
-                            <span className="level-badge" data-level={LEVEL_SHORT[h.level] ?? h.level}>{LEVEL_SHORT[h.level] ?? h.level}</span>
-                            <strong>{chosen ? '✓ ' : ''}{h.name}</strong>
-                            <BedRing beds={h.er_beds} />
-                            <span className="tabular hosp-p">Zoro {Math.round(p * 100)}%</span>
-                          </div>
+                          <div className="do-head"><strong>{chosen ? '✓ ' : ''}{h.name}</strong><span className="tabular">{Math.round(p * 100)}%</span></div>
                           <span className="prob-track"><span className="prob-fill" style={{ width: `${Math.round(p * 100)}%` }} /></span>
                           <HospitalFacts h={h} prefer={transfer.rule.prefer ?? []} />
                         </li>
